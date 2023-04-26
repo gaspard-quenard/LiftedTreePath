@@ -19,6 +19,7 @@ import treerex.hydra.DataStructures.Clique;
 import treerex.hydra.DataStructures.LiftedFlow;
 import treerex.hydra.DataStructures.SASPredicate;
 import treerex.hydra.DataStructures.ScopeVariable;
+import treerex.hydra.DataStructures.ScopesEqual;
 import treerex.hydra.Preprocessing.LiftedSasPlus.AtomCandidate;
 import treerex.hydra.Preprocessing.LiftedSasPlus.AtomVariable;
 import treerex.hydra.Preprocessing.LiftedSasPlus.Candidate;
@@ -51,6 +52,9 @@ public class UtilsStructureProblem {
 
     private static ArrayList<ArrayList<Integer>> cliques;
 
+    // Indicate all the scope that must be equal (rule 18/19 lilotane paper when a negative predicate is identical to a positive predicate for the effect of an action)
+    private static HashSet<ScopesEqual> scopesEquals;
+
     // Indicate for each predicate where is has been last defined (for the time step)
     public static int[] predicateIdToLastDefinePredicate;
     // Indicate for each predicate its ID into its clique (if it is in a clique, else -1)
@@ -71,6 +75,8 @@ public class UtilsStructureProblem {
 
         // For each type, find all its parents types and children types
         UtilsStructureProblem.preprocessingComputeAllParentsAndChildrenEachTypes(problem);
+
+        UtilsStructureProblem.scopesEquals = new HashSet<ScopesEqual>();
 
 
         // Find the type of each object
@@ -343,6 +349,10 @@ public class UtilsStructureProblem {
         for (int i = 0; i < predicateIdToLastDefinePredicate.length; i++) {
             predicateIdToLastDefinePredicate[i] = 0;
         }
+    }
+
+    public static void resetScopesThatMustBeEquals() {
+        UtilsStructureProblem.scopesEquals.clear();
     }
 
 
@@ -1537,6 +1547,9 @@ public class UtilsStructureProblem {
         return frameAxioms.toString();
     }
 
+    static public void addScopeThatMustBeEqualsToDefine(ScopesEqual scopesEqual) {
+        UtilsStructureProblem.scopesEquals.add(scopesEqual);
+    }
 
 
     /***********************************
@@ -1546,5 +1559,9 @@ public class UtilsStructureProblem {
 
      static public ArrayList<HashSet<Clique>> getSubCliques() {
         return UtilsStructureProblem.subCliques;
+     }
+
+     static public HashSet<ScopesEqual> getAllScopesThatMustBeEquals() {
+        return UtilsStructureProblem.scopesEquals;
      }
 }

@@ -1145,7 +1145,73 @@ public class LiftedFlow {
             
 
             if (!effect.isPositive) {
-                effectsSMT_sb.append("(not " + predNameAndTimeStep + ") ");
+
+                effectsSMT_sb.append("(or ");
+
+                // Check if there is a positive predicate with the same name is in the action of this action and that both can be unified to the same predicate
+                for (CertifiedPredicate eff2 : this.effectPredicates) {
+                    if (!eff2.isPositive || !eff2.getPredicateName().equals(effect.getPredicateName())) {
+                        continue;
+                    }
+                    // Ok, those two predicate may be unified. Check if the intersection of all their scope is not empty
+                    boolean intersectionScopeIsEmpty = false;
+                    ArrayList<Integer> idxScopeThatMustBeEqual = new ArrayList<Integer>();
+                    for (int i = 0; i < effect.scope.size(); i++) {
+                        HashSet<String> intersection = new HashSet<String>(effect.scope.get(i).getPossibleValueVariable());
+                        intersection.retainAll(eff2.scope.get(i).getPossibleValueVariable());
+                        if (intersection.size() == 0) {
+                            intersectionScopeIsEmpty = true;
+                            break;
+                        }
+                        // Now, if both of the scope are constant, we do not have to generate the rule to unify them
+                        if (effect.scope.get(i).isConstant() && eff2.scope.get(i).isConstant()) {
+                            continue;
+                        }
+
+                        // If both of the scope are not constant, we have to generate the rule to unify them
+                        idxScopeThatMustBeEqual.add(i);
+                    }
+
+                    if (intersectionScopeIsEmpty) {
+                        continue;
+                    }
+
+                    HashSet<String> allScopeThatMustBeEqualsNames = new HashSet<String>();
+
+                    // Create all the scope that must be equal (if not exist)
+                    for (int i : idxScopeThatMustBeEqual) {
+                        ScopeVariable scopeVar1 = effect.scope.get(i);
+                        ScopeVariable scopeVar2 = eff2.scope.get(i);
+
+                        // If there are identical, no need to enforce equality
+                        if (scopeVar1.getUniqueName().equals(scopeVar2.getUniqueName())) {
+                            continue;
+                        }
+
+                        if (scopeVar1.isConstant()) {
+                            allScopeThatMustBeEqualsNames.add(scopeVar2.getUniqueName() + "__" + scopeVar1.getUniqueName());
+                        }
+                        else if (scopeVar2.isConstant()) {
+                            allScopeThatMustBeEqualsNames.add(scopeVar1.getUniqueName() + "__" + scopeVar2.getUniqueName());
+                        } 
+                        else {
+                            ScopesEqual scopeEqual = new ScopesEqual(scopeVar1, scopeVar2);
+                            allScopeThatMustBeEqualsNames.add(scopeEqual.getName());
+                            // Add it to the list of scope that must be equals to define
+                            UtilsStructureProblem.addScopeThatMustBeEqualsToDefine(scopeEqual);
+                        }
+                    }
+
+                    if (allScopeThatMustBeEqualsNames.size() > 0) {
+                        effectsSMT_sb.append(" (and ");
+                        for (String scopeEqualName : allScopeThatMustBeEqualsNames) {
+                            effectsSMT_sb.append(scopeEqualName + " ");
+                        }
+                        effectsSMT_sb.append(") ");
+                    }
+                }
+
+                effectsSMT_sb.append("(not " + predNameAndTimeStep + ")) ");
             } else {
                 effectsSMT_sb.append(predNameAndTimeStep + " ");
             }

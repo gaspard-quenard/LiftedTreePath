@@ -41,6 +41,7 @@ import treerex.hydra.DataStructures.LiftedFlow;
 import treerex.hydra.DataStructures.PrimitiveTree;
 import treerex.hydra.DataStructures.SASPredicate;
 import treerex.hydra.DataStructures.ScopeVariable;
+import treerex.hydra.DataStructures.ScopesEqual;
 import treerex.hydra.HelperFunctions.UtilFunctions;
 import treerex.hydra.Preprocessing.UtilsStructureProblem;
 import treerex.hydra.Preprocessing.LiftedSasPlus.AtomCandidate;
@@ -1441,6 +1442,10 @@ public class LiftedTreePathEncoder {
         allClauses.append("; Declare all the substitution of a pseudo fact to a ground fact\n");
         allClauses.append(declareAllSubstitutionOfPseudoFactToGroundFact());
 
+        // Declare all the scopes that must be equals
+        allClauses.append("; Declare all the scopes that must be equals\n");
+        allClauses.append(declareAllScopesThatMustBeEquals());
+
         // Then set the value for the initial predicates
         allClauses.append("; Initial values predicates: \n");
         allClauses.append(encodeSetInitialValueAllPredicateSAT());
@@ -1618,6 +1623,19 @@ public class LiftedTreePathEncoder {
         }
 
         return substitutionPseudoFactToGroundFact.toString();
+    }
+
+    private String declareAllScopesThatMustBeEquals() {
+        StringBuilder allScopesThatMustBeEquals = new StringBuilder();
+
+        for (ScopesEqual scopeThatMustBeEqual : UtilsStructureProblem.getAllScopesThatMustBeEquals()) {
+            allScopesThatMustBeEquals.append("(declare-const " + scopeThatMustBeEqual.getName() + " Bool)\n");
+        }
+
+        for (ScopesEqual scopeThatMustBeEqual : UtilsStructureProblem.getAllScopesThatMustBeEquals()) {
+            allScopesThatMustBeEquals.append(scopeThatMustBeEqual.generateSMTRule());
+        }
+        return allScopesThatMustBeEquals.toString();
     }
 
     private String encodeDeclarationAllObjectsSAT() {
@@ -2232,6 +2250,7 @@ public class LiftedTreePathEncoder {
 
         // Some cleaning
         UtilsStructureProblem.resetLastTimePredicateDefined();
+        UtilsStructureProblem.resetScopesThatMustBeEquals();
 
         // Add the predicates of the initial state into the list of the predicates to define (for the time step 0)
         HashSet<String> groundPredicateAtInitState = new HashSet<String>();
