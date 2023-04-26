@@ -79,6 +79,7 @@ public class LiftedTreePath implements Callable<Integer> {
             // Disable log
             parser.setLogLevel(LogLevel.OFF);
             // Parses the domain and the problem files.
+            LOGGER.info("Parse problem: " + this.problemPath + "\n");
             final DefaultParsedProblem parsedProblem = parser.parse(this.domainPath, this.problemPath);
             // Gets the error manager of the parser
             final ErrorManager errorManager = parser.getErrorManager();
@@ -96,6 +97,7 @@ public class LiftedTreePath implements Callable<Integer> {
             problem.instantiate();
 
             // Run the encoder
+            LOGGER.info("Run the encoder\n");
             LiftedTreePathEncoder encoder = new LiftedTreePathEncoder(problem, this.domainPath, this.problemPath);
 
         } catch (Throwable t) {

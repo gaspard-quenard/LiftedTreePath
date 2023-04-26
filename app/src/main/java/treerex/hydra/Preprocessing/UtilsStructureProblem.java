@@ -533,6 +533,51 @@ public class UtilsStructureProblem {
             }
         }
     }
+
+
+    public static void findAllPredicateIdTrueAndFalseForGoalState(Problem problem, HashSet<Integer> predicateIdTrueAtGoalState, HashSet<Integer> predicateIdFalseAtGoalState) {
+
+        // if (true) return;
+
+        if (problem.getParsedProblem().getGoal() == null) {
+            // If there is no goal, then we do not need to do anything
+            return;
+        }
+
+        for (Expression<String> goalPred : problem.getParsedProblem().getGoal()) {
+
+            boolean predicateIsTrue = true;
+
+            if (goalPred.getConnector().equals(Connector.NOT)) {
+                predicateIsTrue = false;
+                goalPred = goalPred.getChildren().get(0);
+            }
+            
+            // Get the predicate name
+            String predicateName = goalPred.getSymbol().getValue();
+
+            // If this is a static predicate, we can ignore it
+            if (UtilsStructureProblem.staticPredicates.contains(predicateName)) {
+                continue;
+            }
+
+            // Get the parameters
+            ArrayList<String> params = new ArrayList<String>();
+            for (int paramIdx = 0; paramIdx < goalPred.getArguments().size(); paramIdx++) {
+                params.add(goalPred.getArguments().get(paramIdx).getValue());
+            }
+
+            // String fullPredicateName = UtilsStructureProblem.getPredicateNameWithParams(predicateName, params);
+            Integer predicateId = UtilsStructureProblem.getPredicateID(predicateName, params);
+
+            // Add the predicate to the list of true predicates
+            if (predicateIsTrue) {
+                predicateIdTrueAtGoalState.add(predicateId);
+            } else {
+                predicateIdFalseAtGoalState.add(predicateId);
+            }
+        }
+    }
     
     private static void getNumberInstantiationEachPredicate(Problem problem) {
         predicateToNumberInstanciations = new HashMap<>();
@@ -1123,12 +1168,12 @@ public class UtilsStructureProblem {
         return binaryValue;
     }
 
-    public static String generateFrameAxiomsForPredicatesWithSASPlus(HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>> allPredicateWhichHaveBeenChangedForThisTimeStep, int timeStep, HashSet<CertifiedPredicate> pseudoFactsToDefine, HashSet<String> groundFactsToDefine, HashSet<String> cliqueBitsToDefine) {
+    public static String generateFrameAxiomsForPredicatesWithSASPlus(HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allPredicateWhichHaveBeenChangedForThisTimeStep, int timeStep, HashSet<CertifiedPredicate> pseudoFactsToDefine, HashSet<String> groundFactsToDefine, HashSet<String> cliqueBitsToDefine) {
         StringBuilder frameAxioms = new StringBuilder();
 
         // If some predicate are not in the SAS groups, we need to add them to the frame axioms in the classical way
-        HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>> allPosPredicateWhichHaveBeenChangedForThisTimeStep = new HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>>();
-        HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>> allNegPredicateWhichHaveBeenChangedForThisTimeStep = new HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>>();
+        HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allPosPredicateWhichHaveBeenChangedForThisTimeStep = new HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>>();
+        HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allNegPredicateWhichHaveBeenChangedForThisTimeStep = new HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>>();
 
         HashSet<Integer> cliquesUpdated = new HashSet<Integer>();
 
@@ -1136,7 +1181,7 @@ public class UtilsStructureProblem {
         for (Integer predicateId : allPredicateWhichHaveBeenChangedForThisTimeStep.keySet()) {
 
             // Get the list of all the flows and the corresponding effect which may have changed this predicate
-            ArrayList<Pair<LiftedFlow, CertifiedPredicate>> allFlowsAndEffWhichMayHaveChangedThisPredicate = allPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId);
+            HashMap<LiftedFlow, HashSet<CertifiedPredicate>> allFlowsAndEffWhichMayHaveChangedThisPredicate = allPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId);
 
             // Get all the SAS groups of this predicate
             SASPredicate predicate = UtilsStructureProblem.predicatesSAS[predicateId];
@@ -1146,19 +1191,30 @@ public class UtilsStructureProblem {
                 // System.exit(0);
                 // Iterate over all flows and effects which may have changed this predicate
 
-                for (Pair<LiftedFlow, CertifiedPredicate> flowWhichMayHaveChangedPredWithEff : allFlowsAndEffWhichMayHaveChangedThisPredicate) {
-                    LiftedFlow flow = flowWhichMayHaveChangedPredWithEff.getLeft();
-                    CertifiedPredicate effect = flowWhichMayHaveChangedPredWithEff.getRight();
-                    if (effect.isPositive()) {
-                        if (!allPosPredicateWhichHaveBeenChangedForThisTimeStep.containsKey(predicateId)) {
-                            allPosPredicateWhichHaveBeenChangedForThisTimeStep.put(predicateId, new ArrayList<Pair<LiftedFlow, CertifiedPredicate>>());
+                // for (Pair<LiftedFlow, ArrayList<CertifiedPredicate>> flowWhichMayHaveChangedPredWithEff : allFlowsAndEffWhichMayHaveChangedThisPredicate) {
+                for (LiftedFlow flow : allFlowsAndEffWhichMayHaveChangedThisPredicate.keySet()) {
+                    // LiftedFlow flow = flowWhichMayHaveChangedPredWithEff.getLeft();
+
+                    // Iterate over all the effects which may have changed this predicate for this flow
+                    for (CertifiedPredicate effect : allFlowsAndEffWhichMayHaveChangedThisPredicate.get(flow)) {
+                        if (effect.isPositive()) {
+                            if (!allPosPredicateWhichHaveBeenChangedForThisTimeStep.containsKey(predicateId)) {
+                                allPosPredicateWhichHaveBeenChangedForThisTimeStep.put(predicateId, new HashMap<LiftedFlow, HashSet<CertifiedPredicate>>());
+                            }
+                            // allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).add(flowWhichMayHaveChangedPredWithEff);
+                            if (!allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).containsKey(flow)) {
+                                allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).put(flow, new HashSet<CertifiedPredicate>());
+                            }
+                            allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).get(flow).add(effect);
+                        } else {
+                            if (!allNegPredicateWhichHaveBeenChangedForThisTimeStep.containsKey(predicateId)) {
+                                allNegPredicateWhichHaveBeenChangedForThisTimeStep.put(predicateId, new HashMap<LiftedFlow, HashSet<CertifiedPredicate>>());
+                            }
+                            if (!allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).containsKey(flow)) {
+                                allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).put(flow, new HashSet<CertifiedPredicate>());
+                            }
+                            allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).get(flow).add(effect);
                         }
-                        allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).add(flowWhichMayHaveChangedPredWithEff);
-                    } else {
-                        if (!allNegPredicateWhichHaveBeenChangedForThisTimeStep.containsKey(predicateId)) {
-                            allNegPredicateWhichHaveBeenChangedForThisTimeStep.put(predicateId, new ArrayList<Pair<LiftedFlow, CertifiedPredicate>>());
-                        }
-                        allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).add(flowWhichMayHaveChangedPredWithEff);
                     }
                 }
                 // Go to the next predicate
@@ -1191,9 +1247,17 @@ public class UtilsStructureProblem {
                 // (OR (AND not a for all a) (OR A and specific grounding of the pseudo facts which prevent P from being changed) => P next step = P last defined step
 
                 // Iterate over all flows which may have changed this predicate
-                for (Pair<LiftedFlow, CertifiedPredicate> flowsWhichMayHaveChangedPredWithEff : allFlowsAndEffWhichMayHaveChangedThisPredicate) {
-                    LiftedFlow flow = flowsWhichMayHaveChangedPredWithEff.getLeft();
-                    CertifiedPredicate effect = flowsWhichMayHaveChangedPredWithEff.getRight();
+                // for (Pair<LiftedFlow, CertifiedPredicate> flowsWhichMayHaveChangedPredWithEff : allFlowsAndEffWhichMayHaveChangedThisPredicate) {
+                for (LiftedFlow flow : allFlowsAndEffWhichMayHaveChangedThisPredicate.keySet()) {
+                    // LiftedFlow flow = flowsWhichMayHaveChangedPredWithEff.getLeft();
+
+                    // For now we only consider the first effect
+                    if (allFlowsAndEffWhichMayHaveChangedThisPredicate.get(flow).size() > 1) {
+                        System.out.println("TODO: handle the case where there are several effects of the same predicate for the same flow");
+                        System.exit(0);
+                    }
+
+                    CertifiedPredicate effect = allFlowsAndEffWhichMayHaveChangedThisPredicate.get(flow).iterator().next();
                     allFlowsAreFalse.append("(not " + flow.getUniqueName() + ") ");
 
                     // Add the effect as well 
@@ -1307,7 +1371,7 @@ public class UtilsStructureProblem {
     }
 
 
-    public static String generateFrameAxiomsForPredicatesWithoutSASPlus(HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>> allPosPredicateWhichHaveBeenChangedForThisTimeStep, HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>> allNegPredicateWhichHaveBeenChangedForThisTimeStep, int timeStep, HashSet<CertifiedPredicate> pseudoFactsToDefine, HashSet<String> groundFactsToDefine) {
+    public static String generateFrameAxiomsForPredicatesWithoutSASPlus(HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allPosPredicateWhichHaveBeenChangedForThisTimeStep, HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allNegPredicateWhichHaveBeenChangedForThisTimeStep, int timeStep, HashSet<CertifiedPredicate> pseudoFactsToDefine, HashSet<String> groundFactsToDefine) {
         StringBuilder frameAxioms = new StringBuilder();
 
         HashSet<Integer> allPredicatesToUpdate = new HashSet<Integer>();
@@ -1329,32 +1393,54 @@ public class UtilsStructureProblem {
 
             // Implement the rule 14 of the lilotane paper: if a predicate has been changed, then there must have been an action which has changed it
             frameAxioms.append("(assert (=> (and (not " + predicateLastTimeDefined + ") " + predicateThisTimeDefined + ") (or ");
-            for (Pair<LiftedFlow, CertifiedPredicate> flowsWhichMayHaveChangedPredWithEff : allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId)) {
-                frameAxioms.append(flowsWhichMayHaveChangedPredWithEff.getLeft().getUniqueName() + " ");
+            for (LiftedFlow flowsWhichMayHaveChangedPredWithEff : allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).keySet()) {
+                frameAxioms.append(flowsWhichMayHaveChangedPredWithEff.getUniqueName() + " ");
             }
             frameAxioms.append(")))\n");
 
             // Now, do the rule 15: if a fact is changed and some action is true, then some set of substition must be active which unify the fact with the action
-            for (Pair<LiftedFlow, CertifiedPredicate> flowsWhichMayHaveChangedPredWithEff : allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId)) {
-                frameAxioms.append("(assert (=> (and (not " + predicateLastTimeDefined + ") " + predicateThisTimeDefined + " " + flowsWhichMayHaveChangedPredWithEff.getLeft().getUniqueName() + ") (and ");
-                CertifiedPredicate eff = flowsWhichMayHaveChangedPredWithEff.getRight();
-                boolean atLeastOne = false;
-                for (int i = 0; i < eff.getScope().size(); i++) {
-                    if (eff.getScope().get(i).isConstant()) {
-                        if (!eff.getScope().get(i).getUniqueName().equals(predicate.getParams().get(i))) {
+            for (LiftedFlow flowWhichMayHaveChangedPredWithEff : allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).keySet()) {
+
+                frameAxioms.append("(assert (=> (and (not " + predicateLastTimeDefined + ") " + predicateThisTimeDefined + " " + flowWhichMayHaveChangedPredWithEff.getUniqueName() + ") ");
+                // CertifiedPredicate eff = flowWhichMayHaveChangedPredWithEff.getRight();
+                
+                boolean multipleEffects = false;
+                if (allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).get(flowWhichMayHaveChangedPredWithEff).size() > 1) {
+                    multipleEffects = true;
+                }
+
+                if (multipleEffects) {
+                    frameAxioms.append("(or ");
+                }
+
+                for (CertifiedPredicate eff : allPosPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).get(flowWhichMayHaveChangedPredWithEff)) {
+
+                    frameAxioms.append("(and ");
+                    boolean atLeastOne = false;
+                    for (int i = 0; i < eff.getScope().size(); i++) {
+                        if (eff.getScope().get(i).isConstant()) {
+                            if (!eff.getScope().get(i).getUniqueName().equals(predicate.getParams().get(i))) {
+                                atLeastOne = true;
+                                frameAxioms.append(eff.getScope().get(i).getUniqueName() + "__" + predicate.getParams().get(i) + " ");
+                            }
+                        } else {
                             atLeastOne = true;
                             frameAxioms.append(eff.getScope().get(i).getUniqueName() + "__" + predicate.getParams().get(i) + " ");
                         }
-                    } else {
-                        atLeastOne = true;
-                        frameAxioms.append(eff.getScope().get(i).getUniqueName() + "__" + predicate.getParams().get(i) + " ");
                     }
+                    if (!atLeastOne) {
+                        frameAxioms.append("true ");
+                    }
+
+                    frameAxioms.append(") ");
+                    
                 }
-                if (!atLeastOne) {
-                    frameAxioms.append("true ");
+
+                if (multipleEffects) {
+                    frameAxioms.append(")\n");
                 }
-                frameAxioms.append(")))\n");
-                
+
+                frameAxioms.append("))\n");
             }
 
             allPredicatesToUpdate.add(predicateId);
@@ -1384,32 +1470,50 @@ public class UtilsStructureProblem {
 
             // Implement the rule 14 of the lilotane paper: if a predicate has been changed, then there must have been an action which has changed it
             frameAxioms.append("(assert (=> (and " + predicateLastTimeDefined + " (not " + predicateThisTimeDefined + ")) (or ");
-            for (Pair<LiftedFlow, CertifiedPredicate> flowsWhichMayHaveChangedPredWithEff : allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId)) {
-                frameAxioms.append(flowsWhichMayHaveChangedPredWithEff.getLeft().getUniqueName() + " ");
+            for (LiftedFlow flowWhichMayHaveChangedPredWithEff : allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).keySet()) {
+                frameAxioms.append(flowWhichMayHaveChangedPredWithEff.getUniqueName() + " ");
             }
             frameAxioms.append(")))\n");
 
             // Now, do the rule 15: if a fact is changed and some action is true, then some set of substition must be active which unify the fact with the action
-            for (Pair<LiftedFlow, CertifiedPredicate> flowsWhichMayHaveChangedPredWithEff : allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId)) {
-                frameAxioms.append("(assert (=> (and " + predicateLastTimeDefined + " (not " + predicateThisTimeDefined + ") " + flowsWhichMayHaveChangedPredWithEff.getLeft().getUniqueName() + ") (and ");
-                CertifiedPredicate eff = flowsWhichMayHaveChangedPredWithEff.getRight();
-                boolean atLeastOne = false;
-                for (int i = 0; i < eff.getScope().size(); i++) {
-                    if (eff.getScope().get(i).isConstant()) {
-                        if (!eff.getScope().get(i).getUniqueName().equals(predicate.getParams().get(i))) {
+            for (LiftedFlow flowWhichMayHaveChangedPredWithEff : allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).keySet()) {
+                frameAxioms.append("(assert (=> (and " + predicateLastTimeDefined + " (not " + predicateThisTimeDefined + ") " + flowWhichMayHaveChangedPredWithEff.getUniqueName() + ") ");
+                
+                boolean multipleEffects = false;
+                if (allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).get(flowWhichMayHaveChangedPredWithEff).size() > 1) {
+                    multipleEffects = true;
+                }
+
+                if (multipleEffects) {
+                    frameAxioms.append("(or ");
+                }
+
+                for (CertifiedPredicate eff : allNegPredicateWhichHaveBeenChangedForThisTimeStep.get(predicateId).get(flowWhichMayHaveChangedPredWithEff)) {
+                    frameAxioms.append("(and ");
+                    boolean atLeastOne = false;
+                    for (int i = 0; i < eff.getScope().size(); i++) {
+                        if (eff.getScope().get(i).isConstant()) {
+                            if (!eff.getScope().get(i).getUniqueName().equals(predicate.getParams().get(i))) {
+                                atLeastOne = true;
+                                frameAxioms.append(eff.getScope().get(i).getUniqueName() + "__" + predicate.getParams().get(i) + " ");
+                            }
+                        } else {
                             atLeastOne = true;
                             frameAxioms.append(eff.getScope().get(i).getUniqueName() + "__" + predicate.getParams().get(i) + " ");
                         }
-                    } else {
-                        atLeastOne = true;
-                        frameAxioms.append(eff.getScope().get(i).getUniqueName() + "__" + predicate.getParams().get(i) + " ");
                     }
+                    if (!atLeastOne) {
+                        frameAxioms.append("true ");
+                    }
+
+                    frameAxioms.append(") ");
                 }
-                if (!atLeastOne) {
-                    frameAxioms.append("true ");
+
+                if (multipleEffects) {
+                    frameAxioms.append(")\n");
                 }
-                frameAxioms.append(")))\n");
-                
+
+                frameAxioms.append("))\n");                
             }
 
             allPredicatesToUpdate.add(predicateId);

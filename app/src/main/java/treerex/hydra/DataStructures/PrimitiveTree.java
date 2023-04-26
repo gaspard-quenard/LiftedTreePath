@@ -13,12 +13,14 @@ import java.util.Stack;
 public class PrimitiveTree {
 
     ArrayList<LiftedFlow> nodes;
+    ArrayList<LiftedFlow> nodesInTopologicalOrder;
     HashSet<Integer> rootNodesIdx;
     ArrayList<HashSet<Integer>> parentsNodesIdx;
     ArrayList<HashSet<Integer>> childrenNodesIdx;
 
     public PrimitiveTree() {
         this.nodes = new ArrayList<LiftedFlow>();
+        this.nodesInTopologicalOrder = new ArrayList<LiftedFlow>();
         this.parentsNodesIdx = new ArrayList<HashSet<Integer>>();
         this.childrenNodesIdx = new ArrayList<HashSet<Integer>>();
         this.rootNodesIdx = new HashSet<Integer>();
@@ -54,6 +56,10 @@ public class PrimitiveTree {
 
     public ArrayList<LiftedFlow> getNodes() {
         return this.nodes;
+    }
+    
+    public ArrayList<LiftedFlow> getNodesInTopologicalOrder() {
+        return this.nodesInTopologicalOrder;
     }
 
     public ArrayList<HashSet<Integer>> getParentsNodesIdx() {
@@ -114,6 +120,7 @@ public class PrimitiveTree {
 
     public void clear() {
         this.nodes.clear();
+        this.nodesInTopologicalOrder.clear();
         this.rootNodesIdx.clear();
         this.parentsNodesIdx.clear();
         this.childrenNodesIdx.clear();
@@ -166,45 +173,47 @@ public class PrimitiveTree {
      *
      * @return the topological sort of the graph, represented as a stack.
      */
-    public Stack<Integer> getTopologicalSort() {
-        int n = this.parentsNodesIdx.size();
-        int[] inDegree = new int[n];
-        Map<Integer, ArrayList<Integer>> graph = new HashMap<>();
-        for (int i = 0; i < n; i++) {
-            for (int neighbor : this.parentsNodesIdx.get(i)) {
-                // Increment in-degree of the neighbor
-                inDegree[neighbor]++;
-                // Add the edge from node 'i' to node 'neighbor'
-                if (!graph.containsKey(i)) {
-                    graph.put(i, new ArrayList<>());
-                }
-                graph.get(i).add(neighbor);
-            }
-        }
+    // public Stack<Integer> getTopologicalSort() {
+    //     int n = this.parentsNodesIdx.size();
+    //     int[] inDegree = new int[n];
+    //     Map<Integer, ArrayList<Integer>> graph = new HashMap<>();
+    //     for (int i = 0; i < n; i++) {
+    //         for (int neighbor : this.parentsNodesIdx.get(i)) {
+    //             // Increment in-degree of the neighbor
+    //             inDegree[neighbor]++;
+    //             // Add the edge from node 'i' to node 'neighbor'
+    //             if (!graph.containsKey(i)) {
+    //                 graph.put(i, new ArrayList<>());
+    //             }
+    //             graph.get(i).add(neighbor);
+    //         }
+    //     }
 
-        Queue<Integer> queue = new LinkedList<>();
-        for (int i = 0; i < n; i++) {
-            // Add node with 0 in-degree to the queue
-            if (inDegree[i] == 0) {
-                queue.offer(i);
-            }
-        }
+    //     Queue<Integer> queue = new LinkedList<>();
+    //     for (int i = 0; i < n; i++) {
+    //         // Add node with 0 in-degree to the queue
+    //         if (inDegree[i] == 0) {
+    //             queue.offer(i);
+    //         }
+    //     }
 
-        Stack<Integer> result = new Stack<>();
-        while (!queue.isEmpty()) {
-            int node = queue.poll();
-            result.push(node);
-            for (int neighbor : graph.getOrDefault(node, new ArrayList<>())) {
-                inDegree[neighbor]--;
-                if (inDegree[neighbor] == 0) {
-                    queue.offer(neighbor);
-                }
-            }
-        }
-        return result;
-    }
+    //     Stack<Integer> result = new Stack<>();
+    //     while (!queue.isEmpty()) {
+    //         int node = queue.poll();
+    //         result.push(node);
+    //         for (int neighbor : graph.getOrDefault(node, new ArrayList<>())) {
+    //             inDegree[neighbor]--;
+    //             if (inDegree[neighbor] == 0) {
+    //                 queue.offer(neighbor);
+    //             }
+    //         }
+    //     }
+    //     return result;
+    // }
 
     public void sortNodesInTopologicalSort() {
-        Collections.sort(this.nodes, Comparator.comparing(LiftedFlow::getMaxStepFromRootNode));
+        this.nodesInTopologicalOrder.clear();
+        this.nodesInTopologicalOrder.addAll(this.nodes);
+        Collections.sort(this.nodesInTopologicalOrder, Comparator.comparing(LiftedFlow::getMaxStepFromRootNode));
     }
 }

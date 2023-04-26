@@ -720,12 +720,26 @@ public class LiftedFlow {
                     preconditionsSMT_sb.append("(not (or ");
                 }
 
+                boolean atLeastOneEquality = false;
+
                 // Iterate over the objects possible for the first argument
                 for (String obj : precondition.scope.get(0).getPossibleValueVariable()) {
                     // Check if the object is in the possible value for the second argument
                     if (precondition.scope.get(1).getPossibleValueVariable().contains(obj)) {
-                        preconditionsSMT_sb.append("(= " + precondition.scope.get(0).getUniqueName() + "__" + obj + " " + precondition.scope.get(1).getUniqueName() + "__" + obj + ") ");
+                        atLeastOneEquality = true;
+                        if (precondition.scope.get(0).isConstant()) {
+                            preconditionsSMT_sb.append(precondition.scope.get(1).getUniqueName() + "__" + obj + " ");
+                        }
+                        else if (precondition.scope.get(1).isConstant()) {
+                            preconditionsSMT_sb.append(precondition.scope.get(0).getUniqueName() + "__" + obj + " ");
+                        } else {
+                            preconditionsSMT_sb.append("(and " + precondition.scope.get(0).getUniqueName() + "__" + obj + " " + precondition.scope.get(1).getUniqueName() + "__" + obj + ") ");
+                        }
                     }
+                }
+
+                if (!atLeastOneEquality) {
+                    preconditionsSMT_sb.append("false ");
                 }
 
                 if (!precondition.isPositive) {
@@ -743,6 +757,13 @@ public class LiftedFlow {
                 boolean atLeastOneValidSubstitutionIsPossible = false;
                 StringBuilder preconditionSMTStaticPredicate_sb = new StringBuilder();
                 preconditionSMTStaticPredicate_sb.append("; Static Precondition: " + precondition + "\n");
+
+                if (validSubstitutions.size() == 0) {
+                    // By definition, if there is no valid substitution, the precondition is always false
+                    // so this path is impossible
+                    preconditionsSMT_sb.append("(not " + this.getUniqueName() + ") ");
+                    continue;
+                }
 
                 if (precondition.isPositive) {
                     preconditionSMTStaticPredicate_sb.append("(assert (=> " + this.getUniqueName() + " (or ");
@@ -778,6 +799,10 @@ public class LiftedFlow {
                             preconditionSMTStaticPredicate_sb.append("true");
                         }
                         preconditionSMTStaticPredicate_sb.append(") ");
+                    }
+
+                    if (!atLeastOneValidSubstitutionIsPossible) {
+                        preconditionSMTStaticPredicate_sb.append("false");
                     }
                     preconditionSMTStaticPredicate_sb.append(")))\n");
                 } else {
@@ -1082,8 +1107,8 @@ public class LiftedFlow {
     HashSet<String> varsToDefine, 
     HashSet<String> pseudoFacstToDefine, 
     HashSet<String> groundFactsToDefine,
-    HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>> allPosPredicatesWhichCanBeChangedByThisAction, 
-    HashMap<Integer, ArrayList<Pair<LiftedFlow, CertifiedPredicate>>> allNegPredicatesWhichCanBeChangedByThisAction, 
+    HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allPosPredicatesWhichCanBeChangedByThisAction, 
+    HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allNegPredicatesWhichCanBeChangedByThisAction, 
     HashSet<String> pseudoFactsAlreadyDefined) {
 
         StringBuilder effectsSMT_sb = new StringBuilder();
@@ -1135,17 +1160,25 @@ public class LiftedFlow {
                 // Get the id of this predicate (not the same ID for a negative predicate and its positive conterpart)
                 int id = UtilsStructureProblem.getPredicateID(effect.predicateName, possibleGrounding);
                 if (effect.isPositive && !allPosPredicatesWhichCanBeChangedByThisAction.containsKey(id)) {
-                    allPosPredicatesWhichCanBeChangedByThisAction.put(id, new ArrayList<Pair<LiftedFlow, CertifiedPredicate>>());
+                    allPosPredicatesWhichCanBeChangedByThisAction.put(id, new HashMap<LiftedFlow, HashSet<CertifiedPredicate>>());
                 }
                 if (!effect.isPositive && !allNegPredicatesWhichCanBeChangedByThisAction.containsKey(id)) {
-                    allNegPredicatesWhichCanBeChangedByThisAction.put(id, new ArrayList<Pair<LiftedFlow, CertifiedPredicate>>());
+                    allNegPredicatesWhichCanBeChangedByThisAction.put(id, new HashMap<LiftedFlow, HashSet<CertifiedPredicate>>());
                 }
                 // Add the pair (this flow, this effect)
                 if (effect.isPositive) {
-                    allPosPredicatesWhichCanBeChangedByThisAction.get(id).add(Pair.of(this, effect));
+                    // Add the effect to the list of effects that can change this predicate
+                    if (!allPosPredicatesWhichCanBeChangedByThisAction.get(id).containsKey(this)) {
+                        allPosPredicatesWhichCanBeChangedByThisAction.get(id).put(this, new HashSet<CertifiedPredicate>());
+                    }
+                    allPosPredicatesWhichCanBeChangedByThisAction.get(id).get(this).add(effect);
                 }
                 else {
-                    allNegPredicatesWhichCanBeChangedByThisAction.get(id).add(Pair.of(this, effect));
+                    // Add the effect to the list of effects that can change this predicate
+                    if (!allNegPredicatesWhichCanBeChangedByThisAction.get(id).containsKey(this)) {
+                        allNegPredicatesWhichCanBeChangedByThisAction.get(id).put(this, new HashSet<CertifiedPredicate>());
+                    }
+                    allNegPredicatesWhichCanBeChangedByThisAction.get(id).get(this).add(effect);
                 }
             }
             
@@ -1334,6 +1367,31 @@ public class LiftedFlow {
     public String getUniqueName() {
         StringBuilder uniqueFlowName = new StringBuilder();
         uniqueFlowName.append("FLOW_");
+
+
+
+        //DEBUG, add the name of all the parents into the name of the flow
+
+        // Indicate is the flow is an action or a method
+        if (this.methodName == null) {
+            uniqueFlowName.append("A_");
+        } else {
+            uniqueFlowName.append("M_");
+        }
+
+        StringBuilder parentsName = new StringBuilder();
+        LiftedFlow parent = this.parentFlow;
+        while (parent != null) {
+            // The parent will be added in reverse order (and it is a method)
+            parentsName.insert(0, parent.methodName + "-");
+            parent = parent.parentFlow;
+        }
+
+        uniqueFlowName.append(parentsName);
+        // END DEBUG
+
+
+
         if (this.methodName != null) {
             uniqueFlowName.append(this.methodName);
         } else {
@@ -1346,7 +1404,8 @@ public class LiftedFlow {
             }
         }
 
-        uniqueFlowName.append("_" + uniqueId);
+        // uniqueFlowName.append("_" + uniqueId);
+        uniqueFlowName.append("%" + uniqueId);
 
         return uniqueFlowName.toString();
     }
