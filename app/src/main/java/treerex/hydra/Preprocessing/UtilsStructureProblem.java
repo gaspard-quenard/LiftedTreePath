@@ -1552,6 +1552,281 @@ public class UtilsStructureProblem {
     }
 
 
+    static public String generatePreconditionsForPredicates(HashMap<CertifiedPredicate, HashSet<LiftedFlow>> mapPreconditionToActions, int stepFromRoot, HashSet<CertifiedPredicate> pseudoFactsToGround, HashSet<String> varsToDefine, HashSet<String> pseudoFactsToDefine, HashSet<String> groundFactsToDefine, HashSet<String> pseudoFactsAlreadyDefined) {
+
+
+        // Set the most condense way to define the preconditions
+        HashMap<HashSet<LiftedFlow>, HashSet<CertifiedPredicate>> setOfActionToPreconditions = new HashMap<HashSet<LiftedFlow>, HashSet<CertifiedPredicate>>();
+
+        for (CertifiedPredicate precondition : mapPreconditionToActions.keySet()) {
+            HashSet<LiftedFlow> set = mapPreconditionToActions.get(precondition);
+            if (!setOfActionToPreconditions.containsKey(set)) {
+                setOfActionToPreconditions.put(set, new HashSet<CertifiedPredicate>());
+            }
+            setOfActionToPreconditions.get(set).add(precondition);
+        }
+
+
+        StringBuilder preconditionsSMT_sb = new StringBuilder();
+        StringBuilder preconditionSMTStaticPredicates_sb = new StringBuilder();
+
+        if (setOfActionToPreconditions.keySet().size() == 0) {
+            return "";
+        }
+
+        for (HashSet<LiftedFlow> actions: setOfActionToPreconditions.keySet()) {
+
+            if (actions.size() == 1) {
+                preconditionsSMT_sb.append("(assert (=> " + actions.iterator().next().getUniqueName() + " (and ");
+            } else {
+                preconditionsSMT_sb.append("(assert (=> (or ");
+                for (LiftedFlow action : actions) {
+                    preconditionsSMT_sb.append(action.getUniqueName() + " ");
+                }
+                preconditionsSMT_sb.append(") (and ");
+            }
+
+
+            boolean atLeastOnePreconditionNotStatic = false;
+
+            for (CertifiedPredicate precondition : setOfActionToPreconditions.get(actions)) {
+
+                // System.out.println("Node: " + this.getUniqueName() + " Precondition: " + precondition);
+
+                if (precondition.getPredicateName().equals("=")) {
+
+                    atLeastOnePreconditionNotStatic = true;
+
+                    if (!precondition.isPositive()) {
+                        preconditionsSMT_sb.append("(not (or ");
+                    }
+
+                    boolean atLeastOneEquality = false;
+
+                    // Iterate over the objects possible for the first argument
+                    for (String obj : precondition.getScope().get(0).getPossibleValueVariable()) {
+                        // Check if the object is in the possible value for the second argument
+                        if (precondition.getScope().get(1).getPossibleValueVariable().contains(obj)) {
+                            atLeastOneEquality = true;
+                            if (precondition.getScope().get(0).isConstant()) {
+                                preconditionsSMT_sb.append(precondition.getScope().get(1).getUniqueName() + "__" + obj + " ");
+                            }
+                            else if (precondition.getScope().get(1).isConstant()) {
+                                preconditionsSMT_sb.append(precondition.getScope().get(0).getUniqueName() + "__" + obj + " ");
+                            } else {
+                                preconditionsSMT_sb.append("(and " + precondition.getScope().get(0).getUniqueName() + "__" + obj + " " + precondition.getScope().get(1).getUniqueName() + "__" + obj + ") ");
+                            }
+                        }
+                    }
+
+                    if (!atLeastOneEquality) {
+                        preconditionsSMT_sb.append("false ");
+                    }
+
+                    if (!precondition.isPositive()) {
+                        preconditionsSMT_sb.append(")) ");
+                    }
+
+                    continue;
+                }
+                // Add the precondtion into the list of predicates to ground if it not already here and if it is not static and if it is not trivially true
+                if (UtilsStructureProblem.staticPredicates.contains(precondition.getPredicateName())) {
+
+                    // If it is a static predicate, we do not need to ground it, and the rule is a little different (see rule 22/23 of the lilotane paper)
+                    // In resume, we enforce that some valid substitions set must hold
+                    HashSet<ArrayList<String>> validSubstitutions = UtilsStructureProblem.getAllObjectsForStaticPredicate(precondition.getPredicateName());
+                    boolean atLeastOneValidSubstitutionIsPossible = false;
+                    StringBuilder preconditionSMTStaticPredicate_sb = new StringBuilder();
+                    preconditionSMTStaticPredicate_sb.append("; Static Precondition: " + precondition + "\n");
+
+                    if (validSubstitutions.size() == 0) {
+                        // By definition, if there is no valid substitution, the precondition is always false
+                        // so this path is impossible
+                        if (actions.size() == 1) {
+                            preconditionsSMT_sb.append("(not " + actions.iterator().next().getUniqueName() + ") ");
+                        } else {
+                            preconditionsSMT_sb.append("(not (and ");
+                            for (LiftedFlow action : actions) {
+                                preconditionsSMT_sb.append(action.getUniqueName() + " ");
+                            }
+                            preconditionsSMT_sb.append(")) ");
+                        }
+                        
+                        continue;
+                    }
+
+                    if (precondition.isPositive()) {
+                        
+                        if (actions.size() == 1) {
+                            preconditionSMTStaticPredicate_sb.append("(assert (=> " + actions.iterator().next().getUniqueName() + " (or ");
+                        } else {
+                            preconditionSMTStaticPredicate_sb.append("(assert (=> (or ");
+                            for (LiftedFlow action : actions) {
+                                preconditionSMTStaticPredicate_sb.append(action.getUniqueName() + " ");
+                            }
+                            preconditionSMTStaticPredicate_sb.append(") (or ");
+                        }
+
+                        for (ArrayList<String> validSubstitution : validSubstitutions) {
+                            
+                            boolean substitutionIsValid = true;
+                            // First check that this substitution is valid
+                            for (int paramIdx = 0; paramIdx < precondition.getScope().size(); paramIdx++) {
+                                // Check that the intersection of the objects of the scope variable and the objects of the valid substitution is not empty
+                                if (!precondition.getScope().get(paramIdx).getPossibleValueVariable().contains(validSubstitution.get(paramIdx))) {
+                                    // It means that the substitution is not valid
+                                    substitutionIsValid = false;
+                                    break;
+                                }
+                            }
+                            if (!substitutionIsValid) {
+                                continue;
+                            }
+
+                            // If we are here, it means that the substitution is valid
+                            atLeastOneValidSubstitutionIsPossible = true;
+                            // Enforce the rule that the substitution must hold
+                            preconditionSMTStaticPredicate_sb.append("(and ");
+                            boolean allParametersAreConstants = true;
+                            for (int paramIdx = 0; paramIdx < precondition.getScope().size(); paramIdx++) {
+                                if (precondition.getScope().get(paramIdx).isConstant()) {
+                                    continue;
+                                }
+                                allParametersAreConstants = false;
+                                preconditionSMTStaticPredicate_sb.append(precondition.getScope().get(paramIdx).getUniqueName() + "__" + validSubstitution.get(paramIdx) + " ");
+                            }
+                            if (allParametersAreConstants) {
+                                preconditionSMTStaticPredicate_sb.append("true");
+                            }
+                            preconditionSMTStaticPredicate_sb.append(") ");
+                        }
+
+                        if (!atLeastOneValidSubstitutionIsPossible) {
+                            preconditionSMTStaticPredicate_sb.append("false");
+                        }
+                        preconditionSMTStaticPredicate_sb.append(")))\n");
+                    } else {
+                        
+                        if (actions.size() == 1) {
+                            preconditionSMTStaticPredicate_sb.append("(assert (=> " + actions.iterator().next().getUniqueName() + " (and ");
+                        } else {
+                            preconditionSMTStaticPredicate_sb.append("(assert (=> (or ");
+                            for (LiftedFlow action : actions) {
+                                preconditionSMTStaticPredicate_sb.append(action.getUniqueName() + " ");
+                            }
+                            preconditionSMTStaticPredicate_sb.append(") (and ");
+                        }
+
+                        for (ArrayList<String> validSubstitution : validSubstitutions) {
+                            
+                            boolean substitutionIsValid = true;
+                            // First check that this substitution is valid
+                            for (int paramIdx = 0; paramIdx < precondition.getScope().size(); paramIdx++) {
+                                // Check that the intersection of the objects of the scope variable and the objects of the valid substitution is not empty
+                                if (!precondition.getScope().get(paramIdx).getPossibleValueVariable().contains(validSubstitution.get(paramIdx))) {
+                                    // It means that the substitution is not valid
+                                    substitutionIsValid = false;
+                                    break;
+                                }
+                            }
+                            if (!substitutionIsValid) {
+                                continue;
+                            }
+
+                            // If we are here, it means that the substitution is valid
+                            atLeastOneValidSubstitutionIsPossible = true;
+                            // Enforce the rule that the substitution must hold
+                            preconditionSMTStaticPredicate_sb.append("(not (and ");
+                            boolean allParametersAreConstants = true;
+                            for (int paramIdx = 0; paramIdx < precondition.getScope().size(); paramIdx++) {
+                                if (precondition.getScope().get(paramIdx).isConstant()) {
+                                    continue;
+                                }
+                                allParametersAreConstants = false;
+                                preconditionSMTStaticPredicate_sb.append(precondition.getScope().get(paramIdx).getUniqueName() + "__" + validSubstitution.get(paramIdx) + " ");
+                            }
+                            if (allParametersAreConstants) {
+                                preconditionSMTStaticPredicate_sb.append("true");
+                            }
+                            preconditionSMTStaticPredicate_sb.append(")) ");
+                        }
+
+                        if (!atLeastOneValidSubstitutionIsPossible) {
+                            preconditionSMTStaticPredicate_sb.append("true");
+                        }
+                        preconditionSMTStaticPredicate_sb.append(")))\n"); 
+                    }
+                    preconditionSMTStaticPredicates_sb.append(preconditionSMTStaticPredicate_sb.toString());
+                }
+                else {
+
+                    atLeastOnePreconditionNotStatic = true;
+
+                    // Get the timestep
+                    int timeStep = stepFromRoot;
+                    if (precondition.isGroundFact()) {
+                        if (!LiftedTreePathConfig.useSASPlusEncoding) {
+                            // Get the last time that this ground fact was defined
+                            ArrayList<String> groundParams = new ArrayList<String>();
+                            for (ScopeVariable scopeVar : precondition.getScope()) {
+                                groundParams.add(scopeVar.getPossibleValueVariable().iterator().next());
+                            }
+                            timeStep = UtilsStructureProblem.getLastTimePredicateDefined(precondition.getPredicateName(), groundParams);
+                        }
+                    }
+
+                    // Add this pseudo fact to the list of pseudo facts to define (only if it is not already in it)
+                    String namePseudoFactWithTimeStep = precondition.toSmt(timeStep);
+
+                    if (!pseudoFactsAlreadyDefined.contains(namePseudoFactWithTimeStep)) {
+                        pseudoFactsAlreadyDefined.add(namePseudoFactWithTimeStep);
+                        // No need to add it if it is a ground fact and we do not use SASPlus encoding, since there is nothing to ground in this case
+                        if (!precondition.isGroundFact() || LiftedTreePathConfig.useSASPlusEncoding) {
+                            pseudoFactsToGround.add(precondition);
+                            pseudoFactsToDefine.add(namePseudoFactWithTimeStep);
+                        } else {
+                            groundFactsToDefine.add(namePseudoFactWithTimeStep);
+                        }
+                    }
+                    
+
+
+
+
+
+                    // if (LiftedTreePathConfig.useSASPlusEncoding && precondition.isGroundFact()) {
+                    //    Directly replace the ground fact by its 
+                    // }
+
+                    varsToDefine.add(namePseudoFactWithTimeStep);
+                    if (!precondition.isPositive()) {
+                        preconditionsSMT_sb.append("(not " + namePseudoFactWithTimeStep + ") ");
+                    } else {
+                        preconditionsSMT_sb.append(namePseudoFactWithTimeStep + " ");
+                    }
+                }
+
+                int a = 0;
+            }
+
+            if (!atLeastOnePreconditionNotStatic) {
+                preconditionsSMT_sb.append("true");
+            }
+
+            preconditionsSMT_sb.append(")))\n");
+
+            if (preconditionSMTStaticPredicates_sb.length() > 0) {
+                preconditionsSMT_sb.append(preconditionSMTStaticPredicates_sb);
+            }
+            int a = 0;
+        }
+
+        return preconditionsSMT_sb.toString();
+
+        
+    }
+
+
     /***********************************
      * 
      * GETTER AND SETTER

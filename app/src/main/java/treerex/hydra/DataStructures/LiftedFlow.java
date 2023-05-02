@@ -54,6 +54,10 @@ public class LiftedFlow {
     HashSet<CertifiedPredicate> preconditionPredicates;
     HashSet<CertifiedPredicate> effectPredicates;
 
+    // Facts that we know for sure that they are true (before and after the effects of the action have been applied)
+    HashSet<Integer> relevantFactsIdInput;
+    HashSet<Integer> relevantFactsIdOutput;
+
 
     HashSet<LiftedFlow> rootsNodesWhichCanLedToThisFlow;
 
@@ -63,6 +67,10 @@ public class LiftedFlow {
     boolean isPrimitiveFlow;
     public boolean hasAlreadyBeenComputedForPrimitiveTree = false;
     int numberChildrenPrimitiveFlow;
+
+    // Some tests
+    public HashSet<ScopeVariable> scopesSeen;
+    public HashMap<ScopeVariable, ScopeVariable> scopesReplacedBy;
 
     public LiftedFlow(String methodName, LiftedFlow parentFlow, Integer parentTaskId,
             ArrayList<ScopeVariable> methodScope, Map<String, ParsedMethod> methodNameToObject,
@@ -85,6 +93,9 @@ public class LiftedFlow {
             inheritPreconditionsFromParent(parentFlow, methodNameToObject);
             // inheritPreconditionsFromParentLFG(parentFlow, methodNameToObject, liftedFamGroups);
         }
+
+        this.relevantFactsIdInput = new HashSet<Integer>();
+        this.relevantFactsIdOutput = new HashSet<Integer>();
 
         this.uniqueId = LiftedFlow.numberLiftedFlow;
         LiftedFlow.numberLiftedFlow++;
@@ -132,6 +143,12 @@ public class LiftedFlow {
         this.preconditionPredicates = new HashSet<CertifiedPredicate>();
         this.effectPredicates = new HashSet<CertifiedPredicate>();
 
+        this.relevantFactsIdInput = new HashSet<Integer>();
+        this.relevantFactsIdOutput = new HashSet<Integer>();
+
+        this.scopesSeen = new HashSet<ScopeVariable>();
+        this.scopesReplacedBy = new HashMap<ScopeVariable, ScopeVariable>();
+
         this.uniqueId = LiftedFlow.numberLiftedFlow;
         LiftedFlow.numberLiftedFlow += macroAction.size(); // To have each subaction have a unique ID
     }
@@ -167,6 +184,12 @@ public class LiftedFlow {
         this.outputCertifiedPredicates = new HashSet<CertifiedPredicate>();
         this.preconditionPredicates = new HashSet<CertifiedPredicate>();
         this.effectPredicates = new HashSet<CertifiedPredicate>();
+
+        this.relevantFactsIdInput = new HashSet<Integer>();
+        this.relevantFactsIdOutput = new HashSet<Integer>();
+
+        this.scopesSeen = new HashSet<ScopeVariable>();
+        this.scopesReplacedBy = new HashMap<ScopeVariable, ScopeVariable>();
 
         this.isBlankAction = true;
         this.uniqueId = LiftedFlow.numberLiftedFlow;
@@ -710,7 +733,7 @@ public class LiftedFlow {
 
         for (CertifiedPredicate precondition : this.preconditionPredicates) {
 
-            System.out.println("Node: " + this.getUniqueName() + " Precondition: " + precondition);
+            // System.out.println("Node: " + this.getUniqueName() + " Precondition: " + precondition);
 
             if (precondition.predicateName.equals("=")) {
 
@@ -912,193 +935,208 @@ public class LiftedFlow {
         int a = 0;
     }
 
+    public void accumulatePrecondtionsAndCorrespondingAction(HashMap<CertifiedPredicate, HashSet<LiftedFlow>> mapPreconditionToActions) {
 
-    public void determinateHowToResolvePreconditionsWithLFG2(HashSet<CertifiedPredicate> pseudoFactsToGround, HashSet<String> varsToDefine, HashSet<CertifiedPredicate> pseudoFactsToDefine, HashSet<String> groundFactsToDefine) {
-
-
-        StringBuilder preconditionsSMT_sb = new StringBuilder();
-        StringBuilder preconditionSMTStaticPredicates_sb = new StringBuilder();
-
-        if (this.preconditionPredicates.size() == 0) {
-            return;
-        }
-
-        preconditionsSMT_sb.append("(assert (=> " + this.getUniqueName() + " (and ");
-
+        // Iterate over all preconditions
         for (CertifiedPredicate precondition : this.preconditionPredicates) {
 
-            System.out.println("Node: " + this.getUniqueName() + " Precondition: " + precondition);
-
-            if (precondition.predicateName.equals("=")) {
-
-                if (!precondition.isPositive) {
-                    preconditionsSMT_sb.append("(not (or ");
-                }
-
-                // Iterate over the objects possible for the first argument
-                for (String obj : precondition.scope.get(0).getPossibleValueVariable()) {
-                    // Check if the object is in the possible value for the second argument
-                    if (precondition.scope.get(1).getPossibleValueVariable().contains(obj)) {
-                        preconditionsSMT_sb.append("(= " + precondition.scope.get(0).getUniqueName() + "__" + obj + " " + precondition.scope.get(1).getUniqueName() + "__" + obj + ") ");
-                    }
-                }
-
-                if (!precondition.isPositive) {
-                    preconditionsSMT_sb.append(")) ");
-                }
-
-                continue;
-            }
-            // Add the precondtion into the list of predicates to ground if it not already here and if it is not static and if it is not trivially true
-            if (UtilsStructureProblem.staticPredicates.contains(precondition.predicateName)) {
-
-                // If it is a static predicate, we do not need to ground it, and the rule is a little different (see rule 22/23 of the lilotane paper)
-                // In resume, we enforce that some valid substitions set must hold
-                HashSet<ArrayList<String>> validSubstitutions = UtilsStructureProblem.getAllObjectsForStaticPredicate(precondition.predicateName);
-                boolean atLeastOneValidSubstitutionIsPossible = false;
-                StringBuilder preconditionSMTStaticPredicate_sb = new StringBuilder();
-                preconditionSMTStaticPredicate_sb.append("; Static Precondition: " + precondition + "\n");
-
-                if (precondition.isPositive) {
-                    preconditionSMTStaticPredicate_sb.append("(assert (=> " + this.getUniqueName() + " (or ");
-                    for (ArrayList<String> validSubstitution : validSubstitutions) {
-                        
-                        boolean substitutionIsValid = true;
-                        // First check that this substitution is valid
-                        for (int paramIdx = 0; paramIdx < precondition.scope.size(); paramIdx++) {
-                            // Check that the intersection of the objects of the scope variable and the objects of the valid substitution is not empty
-                            if (!precondition.scope.get(paramIdx).getPossibleValueVariable().contains(validSubstitution.get(paramIdx))) {
-                                // It means that the substitution is not valid
-                                substitutionIsValid = false;
-                                break;
-                            }
-                        }
-                        if (!substitutionIsValid) {
-                            continue;
-                        }
-
-                        // If we are here, it means that the substitution is valid
-                        atLeastOneValidSubstitutionIsPossible = true;
-                        // Enforce the rule that the substitution must hold
-                        preconditionSMTStaticPredicate_sb.append("(and ");
-                        boolean allParametersAreConstants = true;
-                        for (int paramIdx = 0; paramIdx < precondition.scope.size(); paramIdx++) {
-                            if (precondition.scope.get(paramIdx).isConstant()) {
-                                continue;
-                            }
-                            allParametersAreConstants = false;
-                            preconditionSMTStaticPredicate_sb.append(precondition.scope.get(paramIdx).getUniqueName() + "__" + validSubstitution.get(paramIdx) + " ");
-                        }
-                        if (allParametersAreConstants) {
-                            preconditionSMTStaticPredicate_sb.append("true");
-                        }
-                        preconditionSMTStaticPredicate_sb.append(") ");
-                    }
-                    preconditionSMTStaticPredicate_sb.append(")))\n");
-                } else {
-                    preconditionSMTStaticPredicate_sb.append("(assert (=> " + this.getUniqueName() + " (and ");
-                    for (ArrayList<String> validSubstitution : validSubstitutions) {
-                        
-                        boolean substitutionIsValid = true;
-                        // First check that this substitution is valid
-                        for (int paramIdx = 0; paramIdx < precondition.scope.size(); paramIdx++) {
-                            // Check that the intersection of the objects of the scope variable and the objects of the valid substitution is not empty
-                            if (!precondition.scope.get(paramIdx).getPossibleValueVariable().contains(validSubstitution.get(paramIdx))) {
-                                // It means that the substitution is not valid
-                                substitutionIsValid = false;
-                                break;
-                            }
-                        }
-                        if (!substitutionIsValid) {
-                            continue;
-                        }
-
-                        // If we are here, it means that the substitution is valid
-                        atLeastOneValidSubstitutionIsPossible = true;
-                        // Enforce the rule that the substitution must hold
-                        preconditionSMTStaticPredicate_sb.append("(not (and ");
-                        boolean allParametersAreConstants = true;
-                        for (int paramIdx = 0; paramIdx < precondition.scope.size(); paramIdx++) {
-                            if (precondition.scope.get(paramIdx).isConstant()) {
-                                continue;
-                            }
-                            allParametersAreConstants = false;
-                            preconditionSMTStaticPredicate_sb.append(precondition.scope.get(paramIdx).getUniqueName() + "__" + validSubstitution.get(paramIdx) + " ");
-                        }
-                        if (allParametersAreConstants) {
-                            preconditionSMTStaticPredicate_sb.append("true");
-                        }
-                        preconditionSMTStaticPredicate_sb.append(")) ");
-                    }
-
-                    if (!atLeastOneValidSubstitutionIsPossible) {
-                        preconditionSMTStaticPredicate_sb.append("true");
-                    }
-                    preconditionSMTStaticPredicate_sb.append(")))\n"); 
-                }
-                preconditionSMTStaticPredicates_sb.append(preconditionSMTStaticPredicate_sb.toString());
-            }
-            else {
-                boolean shouldAddIntoPseudoFactsToGround = true;
-                String namePseudoFactPrecondition = precondition.toSmt(0);
-                for (CertifiedPredicate pseudoFactToGround : pseudoFactsToGround) {
-                    if (pseudoFactToGround.toSmt(0).equals(namePseudoFactPrecondition)) {
-                        shouldAddIntoPseudoFactsToGround = false;
-                        break;
-                    }
-                }
-
-                if (shouldAddIntoPseudoFactsToGround) {
-                    pseudoFactsToGround.add(precondition);
-                }
-            
-                if (precondition.isGroundFact()) {
-                    groundFactsToDefine.add(precondition.toSmt(this.getMaxStepFromRootNode()));
-                } else {
-                    // Add this pseudo fact to the list of pseudo facts to define (only if it is not already in it)
-                    boolean alreadyIn = false;
-                    for (CertifiedPredicate certPredAlreadyDefined : pseudoFactsToDefine) {
-                        if (certPredAlreadyDefined.isEqualOrOppositeTo(precondition)) {
-                            alreadyIn = true;
-                            break;
-                        }   
-                    }
-                    if (!alreadyIn) {
-                        pseudoFactsToDefine.add(precondition);
-                    }
-                } 
-
-                // Get the timestep
-                int timeStep = this.stepFromRoot;
-                if (precondition.isGroundFact()) {
-                    // Get the last time that this ground fact was defined
-                    ArrayList<String> groundParams = new ArrayList<String>();
-                    for (ScopeVariable scopeVar : precondition.scope) {
-                        groundParams.add(scopeVar.getPossibleValueVariable().iterator().next());
-                    }
-                    timeStep = UtilsStructureProblem.getLastTimePredicateDefined(precondition.predicateName, groundParams);
-                }
-
-                String predNameAndTimeStep = precondition.toSmt(timeStep);
-                varsToDefine.add(predNameAndTimeStep);
-                if (!precondition.isPositive) {
-                    preconditionsSMT_sb.append("(not " + predNameAndTimeStep + ") ");
-                } else {
-                    preconditionsSMT_sb.append(predNameAndTimeStep + " ");
-                }
+            // If the precondition is not in the map, add it
+            if (!mapPreconditionToActions.containsKey(precondition)) {
+                mapPreconditionToActions.put(precondition, new HashSet<LiftedFlow>());
             }
 
-            int a = 0;
+            // Add this action to the set of actions that have this precondition
+            mapPreconditionToActions.get(precondition).add(this);
         }
-
-        preconditionsSMT_sb.append(")))\n");
-
-        this.preconditionsSMT = preconditionsSMT_sb.toString();
-        if (preconditionSMTStaticPredicates_sb.length() > 0) {
-            this.preconditionsSMT += preconditionSMTStaticPredicates_sb.toString();
-        }
-        int a = 0;
     }
+
+
+    // public void determinateHowToResolvePreconditionsWithLFG2(HashSet<CertifiedPredicate> pseudoFactsToGround, HashSet<String> varsToDefine, HashSet<CertifiedPredicate> pseudoFactsToDefine, HashSet<String> groundFactsToDefine) {
+
+
+    //     StringBuilder preconditionsSMT_sb = new StringBuilder();
+    //     StringBuilder preconditionSMTStaticPredicates_sb = new StringBuilder();
+
+    //     if (this.preconditionPredicates.size() == 0) {
+    //         return;
+    //     }
+
+    //     preconditionsSMT_sb.append("(assert (=> " + this.getUniqueName() + " (and ");
+
+    //     for (CertifiedPredicate precondition : this.preconditionPredicates) {
+
+    //         // System.out.println("Node: " + this.getUniqueName() + " Precondition: " + precondition);
+
+    //         if (precondition.predicateName.equals("=")) {
+
+    //             if (!precondition.isPositive) {
+    //                 preconditionsSMT_sb.append("(not (or ");
+    //             }
+
+    //             // Iterate over the objects possible for the first argument
+    //             for (String obj : precondition.scope.get(0).getPossibleValueVariable()) {
+    //                 // Check if the object is in the possible value for the second argument
+    //                 if (precondition.scope.get(1).getPossibleValueVariable().contains(obj)) {
+    //                     preconditionsSMT_sb.append("(= " + precondition.scope.get(0).getUniqueName() + "__" + obj + " " + precondition.scope.get(1).getUniqueName() + "__" + obj + ") ");
+    //                 }
+    //             }
+
+    //             if (!precondition.isPositive) {
+    //                 preconditionsSMT_sb.append(")) ");
+    //             }
+
+    //             continue;
+    //         }
+    //         // Add the precondtion into the list of predicates to ground if it not already here and if it is not static and if it is not trivially true
+    //         if (UtilsStructureProblem.staticPredicates.contains(precondition.predicateName)) {
+
+    //             // If it is a static predicate, we do not need to ground it, and the rule is a little different (see rule 22/23 of the lilotane paper)
+    //             // In resume, we enforce that some valid substitions set must hold
+    //             HashSet<ArrayList<String>> validSubstitutions = UtilsStructureProblem.getAllObjectsForStaticPredicate(precondition.predicateName);
+    //             boolean atLeastOneValidSubstitutionIsPossible = false;
+    //             StringBuilder preconditionSMTStaticPredicate_sb = new StringBuilder();
+    //             preconditionSMTStaticPredicate_sb.append("; Static Precondition: " + precondition + "\n");
+
+    //             if (precondition.isPositive) {
+    //                 preconditionSMTStaticPredicate_sb.append("(assert (=> " + this.getUniqueName() + " (or ");
+    //                 for (ArrayList<String> validSubstitution : validSubstitutions) {
+                        
+    //                     boolean substitutionIsValid = true;
+    //                     // First check that this substitution is valid
+    //                     for (int paramIdx = 0; paramIdx < precondition.scope.size(); paramIdx++) {
+    //                         // Check that the intersection of the objects of the scope variable and the objects of the valid substitution is not empty
+    //                         if (!precondition.scope.get(paramIdx).getPossibleValueVariable().contains(validSubstitution.get(paramIdx))) {
+    //                             // It means that the substitution is not valid
+    //                             substitutionIsValid = false;
+    //                             break;
+    //                         }
+    //                     }
+    //                     if (!substitutionIsValid) {
+    //                         continue;
+    //                     }
+
+    //                     // If we are here, it means that the substitution is valid
+    //                     atLeastOneValidSubstitutionIsPossible = true;
+    //                     // Enforce the rule that the substitution must hold
+    //                     preconditionSMTStaticPredicate_sb.append("(and ");
+    //                     boolean allParametersAreConstants = true;
+    //                     for (int paramIdx = 0; paramIdx < precondition.scope.size(); paramIdx++) {
+    //                         if (precondition.scope.get(paramIdx).isConstant()) {
+    //                             continue;
+    //                         }
+    //                         allParametersAreConstants = false;
+    //                         preconditionSMTStaticPredicate_sb.append(precondition.scope.get(paramIdx).getUniqueName() + "__" + validSubstitution.get(paramIdx) + " ");
+    //                     }
+    //                     if (allParametersAreConstants) {
+    //                         preconditionSMTStaticPredicate_sb.append("true");
+    //                     }
+    //                     preconditionSMTStaticPredicate_sb.append(") ");
+    //                 }
+    //                 preconditionSMTStaticPredicate_sb.append(")))\n");
+    //             } else {
+    //                 preconditionSMTStaticPredicate_sb.append("(assert (=> " + this.getUniqueName() + " (and ");
+    //                 for (ArrayList<String> validSubstitution : validSubstitutions) {
+                        
+    //                     boolean substitutionIsValid = true;
+    //                     // First check that this substitution is valid
+    //                     for (int paramIdx = 0; paramIdx < precondition.scope.size(); paramIdx++) {
+    //                         // Check that the intersection of the objects of the scope variable and the objects of the valid substitution is not empty
+    //                         if (!precondition.scope.get(paramIdx).getPossibleValueVariable().contains(validSubstitution.get(paramIdx))) {
+    //                             // It means that the substitution is not valid
+    //                             substitutionIsValid = false;
+    //                             break;
+    //                         }
+    //                     }
+    //                     if (!substitutionIsValid) {
+    //                         continue;
+    //                     }
+
+    //                     // If we are here, it means that the substitution is valid
+    //                     atLeastOneValidSubstitutionIsPossible = true;
+    //                     // Enforce the rule that the substitution must hold
+    //                     preconditionSMTStaticPredicate_sb.append("(not (and ");
+    //                     boolean allParametersAreConstants = true;
+    //                     for (int paramIdx = 0; paramIdx < precondition.scope.size(); paramIdx++) {
+    //                         if (precondition.scope.get(paramIdx).isConstant()) {
+    //                             continue;
+    //                         }
+    //                         allParametersAreConstants = false;
+    //                         preconditionSMTStaticPredicate_sb.append(precondition.scope.get(paramIdx).getUniqueName() + "__" + validSubstitution.get(paramIdx) + " ");
+    //                     }
+    //                     if (allParametersAreConstants) {
+    //                         preconditionSMTStaticPredicate_sb.append("true");
+    //                     }
+    //                     preconditionSMTStaticPredicate_sb.append(")) ");
+    //                 }
+
+    //                 if (!atLeastOneValidSubstitutionIsPossible) {
+    //                     preconditionSMTStaticPredicate_sb.append("true");
+    //                 }
+    //                 preconditionSMTStaticPredicate_sb.append(")))\n"); 
+    //             }
+    //             preconditionSMTStaticPredicates_sb.append(preconditionSMTStaticPredicate_sb.toString());
+    //         }
+    //         else {
+    //             boolean shouldAddIntoPseudoFactsToGround = true;
+    //             String namePseudoFactPrecondition = precondition.toSmt(0);
+    //             for (CertifiedPredicate pseudoFactToGround : pseudoFactsToGround) {
+    //                 if (pseudoFactToGround.toSmt(0).equals(namePseudoFactPrecondition)) {
+    //                     shouldAddIntoPseudoFactsToGround = false;
+    //                     break;
+    //                 }
+    //             }
+
+    //             if (shouldAddIntoPseudoFactsToGround) {
+    //                 pseudoFactsToGround.add(precondition);
+    //             }
+            
+    //             if (precondition.isGroundFact()) {
+    //                 groundFactsToDefine.add(precondition.toSmt(this.getMaxStepFromRootNode()));
+    //             } else {
+    //                 // Add this pseudo fact to the list of pseudo facts to define (only if it is not already in it)
+    //                 boolean alreadyIn = false;
+    //                 for (CertifiedPredicate certPredAlreadyDefined : pseudoFactsToDefine) {
+    //                     if (certPredAlreadyDefined.isEqualOrOppositeTo(precondition)) {
+    //                         alreadyIn = true;
+    //                         break;
+    //                     }   
+    //                 }
+    //                 if (!alreadyIn) {
+    //                     pseudoFactsToDefine.add(precondition);
+    //                 }
+    //             } 
+
+    //             // Get the timestep
+    //             int timeStep = this.stepFromRoot;
+    //             if (precondition.isGroundFact()) {
+    //                 // Get the last time that this ground fact was defined
+    //                 ArrayList<String> groundParams = new ArrayList<String>();
+    //                 for (ScopeVariable scopeVar : precondition.scope) {
+    //                     groundParams.add(scopeVar.getPossibleValueVariable().iterator().next());
+    //                 }
+    //                 timeStep = UtilsStructureProblem.getLastTimePredicateDefined(precondition.predicateName, groundParams);
+    //             }
+
+    //             String predNameAndTimeStep = precondition.toSmt(timeStep);
+    //             varsToDefine.add(predNameAndTimeStep);
+    //             if (!precondition.isPositive) {
+    //                 preconditionsSMT_sb.append("(not " + predNameAndTimeStep + ") ");
+    //             } else {
+    //                 preconditionsSMT_sb.append(predNameAndTimeStep + " ");
+    //             }
+    //         }
+
+    //         int a = 0;
+    //     }
+
+    //     preconditionsSMT_sb.append(")))\n");
+
+    //     this.preconditionsSMT = preconditionsSMT_sb.toString();
+    //     if (preconditionSMTStaticPredicates_sb.length() > 0) {
+    //         this.preconditionsSMT += preconditionSMTStaticPredicates_sb.toString();
+    //     }
+    //     int a = 0;
+    // }
 
 
 
@@ -1111,9 +1149,27 @@ public class LiftedFlow {
     HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allNegPredicatesWhichCanBeChangedByThisAction, 
     HashSet<String> pseudoFactsAlreadyDefined) {
 
+        HashSet<Integer> falsePredicates = new HashSet<Integer>();
+        HashSet<Integer> truePredicates = new HashSet<Integer>();
+
         StringBuilder effectsSMT_sb = new StringBuilder();
 
         if (this.effectPredicates.size() == 0) {
+
+            if (LiftedTreePathConfig.restrictRangeScopeVars) {
+                this.relevantFactsIdOutput.clear();
+                this.relevantFactsIdOutput.addAll(this.relevantFactsIdInput);
+        
+                // DEBUG
+                // List of all the predicates which may be true after this action
+                for (int id : this.relevantFactsIdOutput) {
+                    SASPredicate pred = UtilsStructureProblem.predicatesSAS[id];
+                    System.out.println("Predicate " + pred.getFullName());
+                }
+    
+                int a = 0;
+                // END DEBUG
+            }
             return;
         }
 
@@ -1121,7 +1177,7 @@ public class LiftedFlow {
 
         for (CertifiedPredicate effect : this.effectPredicates) {
 
-            System.out.println("Node: " + this.getUniqueName() + " Effect: " + effect);
+            // System.out.println("Node: " + this.getUniqueName() + " Effect: " + effect);
 
             if (effect.predicateName.equals("=")) {
 
@@ -1246,10 +1302,38 @@ public class LiftedFlow {
                     }
                     allNegPredicatesWhichCanBeChangedByThisAction.get(id).get(this).add(effect);
                 }
+
+                if (LiftedTreePathConfig.restrictRangeScopeVars) {
+                    if (effect.isPositive) {
+                        truePredicates.add(id);
+                    } else {
+                        falsePredicates.add(id);
+                    }
+                }
             }
             
 
             int a = 0;
+        }
+
+        if (LiftedTreePathConfig.restrictRangeScopeVars) {
+            this.relevantFactsIdOutput.clear();
+            this.relevantFactsIdOutput.addAll(this.relevantFactsIdInput);
+
+            // Give all the predicates which may be true after this action
+            // (All the predicates which are not in this list are false after this action)
+            this.relevantFactsIdOutput.removeAll(falsePredicates);
+            this.relevantFactsIdOutput.addAll(truePredicates);
+
+            // DEBUG
+            // List of all the predicates which may be true after this action
+            for (int id : this.relevantFactsIdOutput) {
+                SASPredicate pred = UtilsStructureProblem.predicatesSAS[id];
+                System.out.println("Predicate " + pred.getFullName());
+            }
+
+            int a = 0;
+            // END DEBUG
         }
 
         effectsSMT_sb.append(")))\n");
@@ -1258,115 +1342,6 @@ public class LiftedFlow {
         int a = 0;
     }
 
-
-    /**
-     * A predicate is SAS+ pruned, if whatever the value that takes the scope of the
-     * predicate to check,
-     * there is already a predicate in the effects that is among the same lifted fam
-     * group
-     * 
-     * @param predicateToCheck
-     * @param liftedFamGroup
-     * @return
-     */
-    public boolean predicateCanBeSASPlusPruned(CertifiedPredicate predicateToCheck, Candidate liftedFamGroup,
-            AtomCandidate atomThatCanBeBound) {
-
-        HashSet<AtomVariable> varsBoundByPredicateToCheck = new HashSet<AtomVariable>();
-
-        // First bound the predicate to check
-        for (int argi = 0; argi < predicateToCheck.scope.size(); argi++) {
-            AtomVariable var = liftedFamGroup.variables.get(atomThatCanBeBound.paramsId.get(argi));
-
-            // If the variable is a counted variable, it can take any value, there is no
-            // need to bound
-            if (var.isCountedVar) {
-                continue;
-            }
-            // If the predicate to check can take multiple value for this argument, and the
-            // lifted fam
-            // group can only takes one argument, then we cannot check for lifte fam group
-            // here...
-            // e.g: predicate to check: in {pkg_0, pkg_1} {truck_0, truck_1} and lifted fam
-            // group is (in V0: pkg C0: truck}
-            // we can have as effect both in pkg_0 truck_0 and in pkg_1 truck_1)
-            else if (predicateToCheck.scope.get(argi).getPossibleValueVariable().size() > 1) {
-
-                // Here we can bound the variable with the name of the scope value.
-                var.value = predicateToCheck.scope.get(argi).getUniqueName();
-                varsBoundByPredicateToCheck.add(var);
-            } else {
-                // Bound the variable
-                var.value = predicateToCheck.scope.get(argi).getPossibleValueVariable().iterator().next();
-                varsBoundByPredicateToCheck.add(var);
-            }
-        }
-
-        // Now, iterate over all effects of the lifted flow and see if another lifted
-        // flow can be bound to this liftedFamGroup
-        for (CertifiedPredicate outputCertifiedPredicate : this.outputCertifiedPredicates) {
-
-            for (AtomCandidate atomCandidate : liftedFamGroup.mutexGroup) {
-                if (atomCandidate.predSymbolName.equals(outputCertifiedPredicate.predicateName)) {
-
-                    boolean canBeRepresentedByLiftedFamGroup = true;
-                    // Check if the type of each arg is also identical
-                    for (int argi = 0; argi < outputCertifiedPredicate.scope.size(); argi++) {
-                        AtomVariable var = liftedFamGroup.variables.get(atomCandidate.paramsId.get(argi));
-                        if (!var.typeName.equals(outputCertifiedPredicate.scope.get(argi).getType())) {
-                            canBeRepresentedByLiftedFamGroup = false;
-                            break;
-                        }
-                        // Bound the variable
-                        if (var.isCountedVar) {
-                            continue;
-                        } else if (outputCertifiedPredicate.scope.get(argi).getPossibleValueVariable().size() > 1) {
-                            String valueOutputCertifiedPredArgi = outputCertifiedPredicate.scope.get(argi)
-                                    .getUniqueName();
-                            // Check if the variable is correctly bound by the predicate to check
-                            if (var.value != null && var.value.equals(valueOutputCertifiedPredArgi)) {
-                                // It's correct here, we can continue
-                                continue;
-                            } else {
-                                // The var is bound to another value... No correct here
-                                canBeRepresentedByLiftedFamGroup = false;
-                                break;
-                            }
-                        } else {
-                            String valueOutputCertifiedPredArgi = outputCertifiedPredicate.scope.get(argi)
-                                    .getPossibleValueVariable().iterator().next();
-                            // Check if the variable is correctly bound by the predicate to check
-                            if (var.value != null && var.value.equals(valueOutputCertifiedPredArgi)) {
-                                // It's correct here, we can continue
-                                continue;
-                            } else {
-                                // The var is bound to another value... No correct here
-                                canBeRepresentedByLiftedFamGroup = false;
-                                break;
-                            }
-                        }
-
-                    }
-                    if (!canBeRepresentedByLiftedFamGroup) {
-                        continue;
-                    }
-                    // Else, it means that we already have a predicate of the lifted fam ground in
-                    // output
-                    // Clean the variable
-                    for (AtomVariable varBound : varsBoundByPredicateToCheck) {
-                        varBound.value = null;
-                    }
-                    return true;
-                }
-            }
-        }
-
-        // Clean the variables
-        for (AtomVariable varBound : varsBoundByPredicateToCheck) {
-            varBound.value = null;
-        }
-        return false;
-    }
 
    
     /**
@@ -1401,6 +1376,28 @@ public class LiftedFlow {
 
         return flowToDisplay.toString();
     }
+
+    public void setRelevantFactsInputWithInitState(HashSet<Integer> factsTrueAtInit) {
+        this.relevantFactsIdInput.clear();
+        this.relevantFactsIdInput.addAll(factsTrueAtInit);
+    }
+
+    public void setRelevantFactsInputWithParents(HashSet<LiftedFlow> parents) {
+        this.relevantFactsIdInput.clear();
+        for (LiftedFlow parent : parents) {
+            this.relevantFactsIdInput.addAll(parent.relevantFactsIdOutput);
+        }
+    }
+
+    public void pruneScopesVarWithRelevantInputFacts() {
+        // Check if we have static preconditions for this action
+        for (CertifiedPredicate precond : this.preconditionPredicates) {
+            if (UtilsStructureProblem.staticPredicates.contains(precond.predicateName)) {
+                // 
+            }
+        }
+    }
+
 
     @Override
     public String toString() {

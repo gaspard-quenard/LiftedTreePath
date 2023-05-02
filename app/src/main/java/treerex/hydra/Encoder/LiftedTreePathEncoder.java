@@ -51,6 +51,8 @@ import treerex.hydra.Preprocessing.LiftedSasPlus.SASplusLiftedFamGroup;
 import treerex.hydra.SolverConfig.LiftedTreePathConfig;
 import org.apache.commons.lang3.tuple.Pair;
 
+import com.microsoft.z3.*;
+
 enum LIFTED_FAM_GROUP_UNIFIER {
     SUCCESS,
     FAILED,
@@ -98,6 +100,11 @@ public class LiftedTreePathEncoder {
     ArrayList<String> rule13PerTimeStep;
     ArrayList<String> frameAxiomsAndEffsPerTimeStep;
 
+
+    // Test
+    ArrayList<String> preconditionsPerTimeStep;
+
+
     HashSet<String> fluentsTrueInit;
     HashSet<String> fluentsFalseInit;
 
@@ -112,6 +119,8 @@ public class LiftedTreePathEncoder {
     HashSet<String> pseudoFactsToDefine;
 
     HashSet<ScopeVariable> scopeVarsToDefine;
+
+    boolean useZ3Solver = true;
 
     private int layer = 0;
 
@@ -133,6 +142,11 @@ public class LiftedTreePathEncoder {
 
     ArrayList<Candidate> liftedFamGroups;
 
+
+    double totalSolverTime;
+    double beginTotalTime;
+    double totalTime;
+
     public void showAllPaths() {
 
         // Show a single path
@@ -147,10 +161,11 @@ public class LiftedTreePathEncoder {
         this.domainPath = domainPath;
         this.problemPath = problemPath;
 
-        this.config = new LiftedTreePathConfig(true, false, false, false);
+        this.config = new LiftedTreePathConfig(false, false, false, false);
 
         rule13PerTimeStep = new ArrayList<String>();
         frameAxiomsAndEffsPerTimeStep = new ArrayList<String>();
+        preconditionsPerTimeStep = new ArrayList<String>();
 
         this.dictIdxToFrameAxioms = new HashMap<Integer, ArrayList<String>>();
 
@@ -172,6 +187,9 @@ public class LiftedTreePathEncoder {
         this.scopeVarsToDefine = new HashSet<ScopeVariable>();
         // Ok, let's begin !
         int previousTaksId = -1;
+
+
+        this.beginTotalTime = System.currentTimeMillis();
 
 
         // Ordered all the subtaks of each task (to have a deterministic order which allow reproducibility)
@@ -634,6 +652,10 @@ public class LiftedTreePathEncoder {
                 System.out.println("Compute certified predicates primitive tree");
                 computeCertifiedPredicatesPrimitiveTree();
 
+                // if (LiftedTreePathConfig.reuseScopeVariable) {
+                //     changeFlowsScopesToReuseScopeVariables();
+                // }
+
                 System.out.println("Encode SMT\n");
                 // Encode for SAT
                 // CleanAndOptimizePritmitivePaths();
@@ -647,10 +669,19 @@ public class LiftedTreePathEncoder {
                 System.out.println("Launch solver on file");
 
                 // Run the SMT solver on the file
+                long beginSolverTime = System.currentTimeMillis();
                 String responseSMT = executeSMTSolverOnFile();
+                long endSolverTime = System.currentTimeMillis();
+                long solverTime = endSolverTime - beginSolverTime;
+                // if (LiftedTreePathConfig.DEBUG) 
+                {
+                    System.out.println("SMT solver time: " + solverTime + " ms");
+                }
+                this.totalSolverTime += solverTime;
 
                 if (fileIsSatisfiable(responseSMT)) {
                     System.out.println("SAT solution found !");
+                    this.totalTime = System.currentTimeMillis() - this.beginTotalTime;
 
                     System.out.println("Extract the hierarchy of the plan...\n");
                     SequentialPlan plan = extractPlanAndHierarchyFromSolver(responseSMT);
@@ -671,9 +702,7 @@ public class LiftedTreePathEncoder {
                         System.out.println("Plan is NOT valid !\n");
                     }
 
-                    System.out.println("Finishing executing at layer: " + this.layer);
-
-                    return;
+                    break;
                 }
             }
 
@@ -698,7 +727,14 @@ public class LiftedTreePathEncoder {
             
         }
 
+        if (this.totalTime == 0) {
+            this.totalTime = System.currentTimeMillis() - this.beginTotalTime;
+        }
+        
+
         System.out.println("Finishing executing at layer: " + this.layer);
+        System.out.println("Total time execution: " + this.totalTime / 1000F + " s");
+        System.out.println("Total solver time: " + this.totalSolverTime / 1000F + " s");
     }
 
     private void refineAllLiftedFlows() {
@@ -723,7 +759,10 @@ public class LiftedTreePathEncoder {
             // Iterate over all children of the method of this flow
             String methodNameFlow = flowParent.getMethodName();
 
-            System.out.println("Refine flow : " + flowParent);
+            if (LiftedTreePathConfig.DEBUG) {
+                System.out.println("Refine flow : " + flowParent);
+            }
+            
 
             ParsedMethod liftedMethod = this.methodNameToObj.get(methodNameFlow);
 
@@ -752,8 +791,11 @@ public class LiftedTreePathEncoder {
 
                 newPaths.add(newFlowBlankAction);
 
-                System.out.println(newFlowBlankAction);
-                System.out.println("===============");
+                if (LiftedTreePathConfig.DEBUG) {
+                    System.out.println(newFlowBlankAction);
+                    System.out.println("===============");
+                }
+
                 continue;
             }
 
@@ -849,6 +891,9 @@ public class LiftedTreePathEncoder {
                         }
                     }
 
+                    // Only used with the reuseScopeVariable option
+                    HashMap<String, ArrayList<ScopeVariable>> dictScopeVariableThatCanBeReused = new HashMap<String, ArrayList<ScopeVariable>>();
+
                     // Now, we need to find all the methods which can solve this subtask
                     for (ParsedMethod subMethod : problem.getParsedProblem().getMethods()) {
 
@@ -888,18 +933,47 @@ public class LiftedTreePathEncoder {
 
                             // Or if it is a new parameter introduced by the method
                             if (!isParameterOfParentTask) {
+
                                 ScopeVariable scopeArg = new ScopeVariable();
-                                this.scopeVarsToDefine.add(scopeArg);
-                                // Get the type of the argument
-                                String typeArg = subMethodArg.getTypes().get(0).getValue();
-                                scopeArg.addTypeVariable(typeArg);
-                                // Initialize the scope argument with all value of this type
-                                for (String obj : dictTypeToObjects.get(typeArg)) {
-                                    scopeArg.addValueToScope(obj);
+                                boolean canUseAnotherScopeVariable = false;
+
+                                if (LiftedTreePathConfig.reuseScopeVariable) {
+                                    // Check if there is a scope variable with the same type in the dictionary scopeVarThatCanBeShared
+                                    // TODO LATER: Improve to be able to use scope varible of other method if it in the same time step or if there is no predecessor/successor in common
+                                    String typeArg = subMethodArg.getTypes().get(0).getValue();
+                                    if (dictScopeVariableThatCanBeReused.keySet().contains(typeArg)) {
+                                        for (ScopeVariable sv : dictScopeVariableThatCanBeReused.get(typeArg)) {
+                                            // Check if we do not already use this scopeVariable for this method
+                                            if (!scopeSubMethod.contains(sv)) {
+                                                scopeArg = sv;
+                                                canUseAnotherScopeVariable = true;
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
-                                for (String typeChild : dictTypeToChildTypes.get(typeArg)) {
-                                    for (String obj : dictTypeToObjects.get(typeChild)) {
+                                if (!canUseAnotherScopeVariable) {
+                                    // scopeArg = new ScopeVariable();
+                                    this.scopeVarsToDefine.add(scopeArg);
+                                    // Get the type of the argument
+                                    String typeArg = subMethodArg.getTypes().get(0).getValue();
+                                    scopeArg.addTypeVariable(typeArg);
+                                    // Initialize the scope argument with all value of this type
+                                    for (String obj : dictTypeToObjects.get(typeArg)) {
                                         scopeArg.addValueToScope(obj);
+                                    }
+                                    for (String typeChild : dictTypeToChildTypes.get(typeArg)) {
+                                        for (String obj : dictTypeToObjects.get(typeChild)) {
+                                            scopeArg.addValueToScope(obj);
+                                        }
+                                    }
+
+                                    if (LiftedTreePathConfig.reuseScopeVariable) {
+                                        // Add this scope variable to the dictionary
+                                        if (!dictScopeVariableThatCanBeReused.keySet().contains(typeArg)) {
+                                            dictScopeVariableThatCanBeReused.put(typeArg, new ArrayList<ScopeVariable>());
+                                        }
+                                        dictScopeVariableThatCanBeReused.get(typeArg).add(scopeArg);
                                     }
                                 }
                                 scopeSubMethod.add(scopeArg);
@@ -949,11 +1023,13 @@ public class LiftedTreePathEncoder {
                     newInitialPaths.addAll(newLiftedFlows);
                 }
 
-                System.out.println("Subtask: " + idxSubtask + " ");
-                for (LiftedFlow newLiftedFlow : newLiftedFlows) {
-                    System.out.println(newLiftedFlow);
+                if (LiftedTreePathConfig.DEBUG) {
+                    System.out.println("Subtask: " + idxSubtask + " ");
+                    for (LiftedFlow newLiftedFlow : newLiftedFlows) {
+                        System.out.println(newLiftedFlow);
+                    }
+                    System.out.println("===============");
                 }
-                System.out.println("===============");
 
                 previousLiftedFlows = newLiftedFlows;
                 newLiftedFlows = new ArrayList<LiftedFlow>();
@@ -991,20 +1067,20 @@ public class LiftedTreePathEncoder {
         this.initialPaths = newInitialPaths;
 
         // SOME DEBUG INFORMATION
-        for (LiftedFlow flow : this.paths) {
-            System.out.println(flow.getUniqueName());
-            System.out.print("  Previous flows: ");
-            for (LiftedFlow previousFlow : flow.getPreviousesLiftedFlow()) {
-                System.out.print(previousFlow.getUniqueName() + " ");
-            }
-            System.out.print("\n  Next flows: ");
-            for (LiftedFlow nextFlow : flow.getNextsLiftedFlow()) {
-                System.out.print(nextFlow.getUniqueName() + " ");
-            }
-            System.out.println("\n");
-            int a = 0;
-        }
-        int b= 0;
+        // for (LiftedFlow flow : this.paths) {
+        //     System.out.println(flow.getUniqueName());
+        //     System.out.print("  Previous flows: ");
+        //     for (LiftedFlow previousFlow : flow.getPreviousesLiftedFlow()) {
+        //         System.out.print(previousFlow.getUniqueName() + " ");
+        //     }
+        //     System.out.print("\n  Next flows: ");
+        //     for (LiftedFlow nextFlow : flow.getNextsLiftedFlow()) {
+        //         System.out.print(nextFlow.getUniqueName() + " ");
+        //     }
+        //     System.out.println("\n");
+        //     int a = 0;
+        // }
+        // int b= 0;
     }
 
     /**
@@ -1028,8 +1104,13 @@ public class LiftedTreePathEncoder {
         // Path executablePath = Paths.get("app", "solverBinary", "cvc5").toAbsolutePath();
         // String executableSolverSMT = executablePath.toString();
         String executableSolverSMT = "/home/gaspard/LIG/Code/lifted_tree_path/app/solverBinary/cvc5";
-        String command = executableSolverSMT + " " + this.filenameSMT + " --lang smt";
-        // String command = "z3 " + this.filenameSMT;
+        String command;
+        if (useZ3Solver) {
+            command = "z3 " + this.filenameSMT;
+        } else {
+            command = executableSolverSMT + " " + this.filenameSMT + " --lang smt";    
+        }
+        
         try {
             Process p = Runtime.getRuntime().exec(command);
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
@@ -1049,6 +1130,40 @@ public class LiftedTreePathEncoder {
 
         int a = 0;
 
+
+        if (useZ3Solver) {
+            // In z3 output, the value of a variable is given in the next line (instead of the same line as for cvc5)
+            StringBuilder sb = new StringBuilder(outputSMTSolver.length());
+            boolean insideDefineFun = false;
+            int skipNChars = 0;
+            
+            for (int i = 0; i < outputSMTSolver.length(); i++) {
+                if (skipNChars > 0) {
+                    skipNChars--;
+                    continue;
+                }
+                char c = outputSMTSolver.charAt(i);
+                char next = (i + 1 < outputSMTSolver.length()) ? outputSMTSolver.charAt(i + 1) : '\0';
+            
+                if (c == '(' && next == 'd') {
+                    insideDefineFun = true;
+                    sb.append(c);
+                } else if (c == '\n' && insideDefineFun) {
+                    // Skip this \n (and the next 2 chars which is are ' ')
+                    skipNChars = 3;
+                    insideDefineFun = false;
+                } else if (c == '\n' && next == ' ') {
+                    // Skip the space at the beginning of the line
+                    skipNChars = 2;
+                    sb.append(c);
+                } else {
+                    sb.append(c);
+                }
+            }
+            
+            outputSMTSolver = sb.toString();
+        }
+
         String[] outputLines = outputSMTSolver.split("\n");
 
         List<String> actionsInPlan = Arrays.asList(outputLines);
@@ -1057,11 +1172,12 @@ public class LiftedTreePathEncoder {
         // First, extract all the actions which are true
         actionsInPlan = Arrays.asList(actionsInPlan.stream().filter(s -> (s.contains("FLOW_") && s.contains(" true)")))
                 .toArray(String[]::new));
+
         // scopeVarActions = Arrays
                 // .asList(scopeVarActions.stream().filter(s -> s.contains("SCOPE_")).toArray(String[]::new));
 
         scopeVarActions = Arrays
-                .asList(scopeVarActions.stream().filter(s -> s.contains("true")).filter(s -> s.split(" ")[1].startsWith("SCOPE_")).toArray(String[]::new));
+                .asList(scopeVarActions.stream().filter(s -> s.contains("true")).filter(s -> s.split(" ")[1].startsWith("SCOPE_") && !s.contains("__eq__")).toArray(String[]::new));
 
         // Get the objects associated with each action
         List<LiftedFlow> actionsObjInPlan = new ArrayList<LiftedFlow>();
@@ -1074,6 +1190,20 @@ public class LiftedTreePathEncoder {
                     actionsObjInPlan.add(actionObj);
                 }
             }
+        }
+
+        // Sort the actionsObkInPlan by how far they are from the root (attribute stepFromRoot) (done automatically by cvc5)
+        if (useZ3Solver) {
+            Collections.sort(actionsObjInPlan, new Comparator<LiftedFlow>() {
+                @Override
+                public int compare(LiftedFlow o1, LiftedFlow o2) {
+                    return o1.getMaxStepFromRootNode() - o2.getMaxStepFromRootNode();
+                }
+            });
+        }
+
+        for (LiftedFlow actionObjInPlan : actionsObjInPlan) {
+            System.out.println(actionObjInPlan.getUniqueName() + " " + actionObjInPlan.getMaxStepFromRootNode());
         }
 
         SequentialPlan p = new SequentialPlan();
@@ -1407,7 +1537,7 @@ public class LiftedTreePathEncoder {
         // So what do we have to encode
 
         StringBuilder allClauses = new StringBuilder();
-        allClauses.append("(set-logic QF_UFLIA)\n");
+        allClauses.append("(set-logic QF_SAT)\n");
         allClauses.append("(set-option :produce-models true)\n");
 
         // Encode all objects
@@ -1458,6 +1588,7 @@ public class LiftedTreePathEncoder {
         // previous flow can satisfied it or it can take it from the initial predicate)
 
         int currentTimeStep = 0;
+        boolean preconditionAlreadyDefinedForThisTimeStep = false;
 
         allClauses.append("; For time step " + currentTimeStep + "\n");
         for (LiftedFlow node : this.primitiveTree.getNodes()) {
@@ -1474,11 +1605,135 @@ public class LiftedTreePathEncoder {
                 allClauses.append(this.frameAxiomsAndEffsPerTimeStep.get(currentTimeStep));
 
                 currentTimeStep = node.getMaxStepFromRootNode();
+                preconditionAlreadyDefinedForThisTimeStep = false;
             }
 
             // Define the precondition of the node
-            allClauses.append("; Precondition of " + node.getUniqueName() + "\n");
-            allClauses.append(node.preconditionsSMT);
+            if (!LiftedTreePathConfig.accumulatePrecondtions) {
+                allClauses.append("; Precondition of " + node.getUniqueName() + "\n");
+                allClauses.append(node.preconditionsSMT);
+            } else {
+                if (!preconditionAlreadyDefinedForThisTimeStep && this.preconditionsPerTimeStep.size() >= currentTimeStep) {
+                    allClauses.append("; Preconditions\n");
+                    allClauses.append(this.preconditionsPerTimeStep.get(currentTimeStep));
+                    preconditionAlreadyDefinedForThisTimeStep = true;
+                }
+            }
+
+
+            // Define the effects of the node
+            allClauses.append("; Effects of " + node.getUniqueName() + "\n");
+            allClauses.append(node.effectsSMT);
+        }
+
+        // Declare the goal state (if there is one)
+        if (this.fluentsIdTrueGoal.size() > 0 || this.fluentsIdFalseGoal.size() > 0) {
+            allClauses.append("; Declare the goal state\n");
+            allClauses.append(encodeDeclarationGoalStateSAT());
+        }
+
+        allClauses.append("(check-sat)\n");
+        allClauses.append("(get-model)\n");
+        allClauses.append("(exit)\n");
+        // Should be about it.
+
+        BufferedWriter writer = new BufferedWriter(new FileWriter(this.filenameSMT));
+        writer.write(allClauses.toString());
+        writer.flush();
+        writer.close();
+
+        int a = 0;
+    }
+
+
+    private void encodeSATWithZ3API() throws IOException {
+
+
+
+        StringBuilder allClauses = new StringBuilder();
+        allClauses.append("(set-logic QF_SAT)\n");
+        allClauses.append("(set-option :produce-models true)\n");
+
+        // Encode all objects
+        // allClauses.append("; Declare all of our objects and assign value to them\n");
+        // allClauses.append(encodeDeclarationAllObjectsSAT());
+
+        // Then declare all of the initial predicates
+        // allClauses.append("; Declare all of our predciates initial values\n");
+        // allClauses.append(encodeDeclarationAllPredicateSAT());
+        allClauses.append("; Declare all the ground predicates\n");
+        allClauses.append(encodeDeclarationAllPredicateSAT2());
+
+        if (LiftedTreePathConfig.useSASPlusEncoding) {
+            allClauses.append("; Declare all of our cliques bits\n");
+            allClauses.append(encodeDeclarationAllCliqueBitsSAT());
+        }
+
+        // Then declare all of our flow actions
+        allClauses.append("; declare all macro actions\n");
+        allClauses.append(encodeDeclarationAllMacroActionsSAT());
+
+        // Then declare the all the variables scope (only the scope that can be taken by
+        // the flows that will be encoded)
+        allClauses.append("; declare all of our macro actions variable scope\n");
+        allClauses.append(encodeDeclarationScopeVariablesSAT());
+
+        // Then declare all of the possible flows path
+        allClauses.append("; Declare all the macro actions paths\n");
+        allClauses.append(declareAllMacroActionsPaths());
+
+        // Declare all the substitution of a pseudo fact to a ground fact
+        allClauses.append("; Declare all the substitution of a pseudo fact to a ground fact\n");
+        allClauses.append(declareAllSubstitutionOfPseudoFactToGroundFact());
+
+        // Declare all the scopes that must be equals
+        allClauses.append("; Declare all the scopes that must be equals\n");
+        allClauses.append(declareAllScopesThatMustBeEquals());
+
+        // Then set the value for the initial predicates
+        allClauses.append("; Initial values predicates: \n");
+        allClauses.append(encodeSetInitialValueAllPredicateSAT());
+
+        // Add all the constrains on the scopes
+        // allClauses.append("; Constrains on scopes\n");
+        // allClauses.append(declaratationAllConstrainsOnScope());
+
+        // Then, for each flows, indicate where it can take its precondition (either a
+        // previous flow can satisfied it or it can take it from the initial predicate)
+
+        int currentTimeStep = 0;
+        boolean preconditionAlreadyDefinedForThisTimeStep = false;
+
+        allClauses.append("; For time step " + currentTimeStep + "\n");
+        for (LiftedFlow node : this.primitiveTree.getNodes()) {
+            
+            if (node.getMaxStepFromRootNode() > currentTimeStep) {
+                allClauses.append("; For time step " + (currentTimeStep + 1) + "\n");
+
+                // Define the rule13 for this time step
+                // allClauses.append("; Rule 13\n");
+                // allClauses.append(this.rule13PerTimeStep.get(currentTimeStep));
+
+                // Define the frame axioms for this time step
+                allClauses.append("; Frame axioms\n");
+                allClauses.append(this.frameAxiomsAndEffsPerTimeStep.get(currentTimeStep));
+
+                currentTimeStep = node.getMaxStepFromRootNode();
+                preconditionAlreadyDefinedForThisTimeStep = false;
+            }
+
+            // Define the precondition of the node
+            if (!LiftedTreePathConfig.accumulatePrecondtions) {
+                allClauses.append("; Precondition of " + node.getUniqueName() + "\n");
+                allClauses.append(node.preconditionsSMT);
+            } else {
+                if (!preconditionAlreadyDefinedForThisTimeStep && this.preconditionsPerTimeStep.size() >= currentTimeStep) {
+                    allClauses.append("; Preconditions\n");
+                    allClauses.append(this.preconditionsPerTimeStep.get(currentTimeStep));
+                    preconditionAlreadyDefinedForThisTimeStep = true;
+                }
+            }
+
 
             // Define the effects of the node
             allClauses.append("; Effects of " + node.getUniqueName() + "\n");
@@ -2035,13 +2290,26 @@ public class LiftedTreePathEncoder {
                 declarationScopeVariables.append("))\n");
 
                 // Indicate as well that the scope variable can take at most one value
-                // HashSet<String> valuesToIterate = scopeVariable.getPossibleValueVariable();
+                
                 ArrayList<String> valuesOfScope = new ArrayList<String>(scopeVariable.getPossibleValueVariable());
-                for (int i = 0; i < valuesOfScope.size(); i++) {
-                    for (int j = i + 1; j < valuesOfScope.size(); j++) {
-                        declarationScopeVariables.append("(assert (or (not " + scopeVariable.getUniqueName()
-                                + "__" + valuesOfScope.get(i) + ") (not " + scopeVariable.getUniqueName() + "__"
-                                + valuesOfScope.get(j) + ")))\n");
+
+                if (LiftedTreePathConfig.optimizedAtMostOne) {
+                    //(assert ((_ at-most 1) SCOPE_492__city_loc_0 SCOPE_492__city_loc_1))
+                    declarationScopeVariables.append("(assert ((_ at-most 1) ");
+                    for (String value : scopeVariable.getPossibleValueVariable()) {
+                        declarationScopeVariables
+                                .append(scopeVariable.getUniqueName() + "__" + value + " ");
+                    }
+                    declarationScopeVariables.append("))\n");
+
+                }
+                else {
+                    for (int i = 0; i < valuesOfScope.size(); i++) {
+                        for (int j = i + 1; j < valuesOfScope.size(); j++) {
+                            declarationScopeVariables.append("(assert (or (not " + scopeVariable.getUniqueName()
+                                    + "__" + valuesOfScope.get(i) + ") (not " + scopeVariable.getUniqueName() + "__"
+                                    + valuesOfScope.get(j) + ")))\n");
+                        }
                     }
                 }
 
@@ -2282,6 +2550,9 @@ public class LiftedTreePathEncoder {
 
         this.rule13PerTimeStep.clear();
         this.frameAxiomsAndEffsPerTimeStep.clear();
+        this.preconditionsPerTimeStep.clear();
+
+        HashMap<CertifiedPredicate, HashSet<LiftedFlow>> mapPreconditionToActions = new HashMap<CertifiedPredicate, HashSet<LiftedFlow>>();
 
         // For each time step, we have to define the frame axioms and effects
         HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allPosPredicateWhichCanBeChangedByActionOfThisTimeStep = new HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>>();
@@ -2295,7 +2566,17 @@ public class LiftedTreePathEncoder {
 
             // If it is greated that the step from Root, we can execute the frame axioms and clear them afterward
             if (stepNodeToIterate > stepFromRoot) {
-                System.out.println("Execute frame axioms and effects for time step: " + stepFromRoot);
+                // System.out.println("Execute frame axioms and effects for time step: " + stepFromRoot);
+
+
+                if (LiftedTreePathConfig.accumulatePrecondtions) {
+
+                    // We have accumalted all the precondition for this time step and the set of actions which can do these preconditions
+                    // Generate the SMT for the preconditions
+                    String precondtionsForThisTimeStep = UtilsStructureProblem.generatePreconditionsForPredicates(mapPreconditionToActions, stepFromRoot, precondPredToGround, varsToDefine, this.pseudoFactsToDefine, this.groundFactsToDefine, pseudoFactsAlreadyDefined);
+                    this.preconditionsPerTimeStep.add(precondtionsForThisTimeStep);
+                    mapPreconditionToActions.clear();
+                }
                 
 
                 pseudoFactTimeStep = new HashSet<CertifiedPredicate>();
@@ -2308,8 +2589,8 @@ public class LiftedTreePathEncoder {
                 this.rule13PerTimeStep.add(rule13_precond);
                 this.rule13PerTimeStep.add(rule13_effects);
 
-                System.out.println(rule13_precond);
-                System.out.println(rule13_effects);
+                // System.out.println(rule13_precond);
+                // System.out.println(rule13_effects);
 
                 // StringBuilder allEffsAndFrameAxioms = new StringBuilder();
                 // for (EffActionsAndFrameAxioms effActionsAndFrameAxioms : predicateToFrameAxiomsAndEffectsNotYetDefined) {
@@ -2342,7 +2623,6 @@ public class LiftedTreePathEncoder {
                 allPosPredicateWhichCanBeChangedByActionOfThisTimeStep.clear();
                 allNegPredicateWhichCanBeChangedByActionOfThisTimeStep.clear();
 
-
                 // Increment the step from root
                 stepFromRoot = stepNodeToIterate;
 
@@ -2350,8 +2630,18 @@ public class LiftedTreePathEncoder {
             }
 
 
-            System.out.println("==========");
-            System.out.println("Current Node: " + nodeToProcess.getUniqueName() + " (" + nodeToProcess.getMaxStepFromRootNode() + ")");
+            // System.out.println("==========");
+            // System.out.println("Current Node: " + nodeToProcess.getUniqueName() + " (" + nodeToProcess.getMaxStepFromRootNode() + ")");
+
+            if (LiftedTreePathConfig.restrictRangeScopeVars) {
+                if (stepFromRoot == 0) {
+                    nodeToProcess.setRelevantFactsInputWithInitState(this.fluentsIdTrueInit);
+                } else {
+                    //  Get all the parents of this node
+                    HashSet<LiftedFlow> parentsNode = this.primitiveTree.getParents(nodeToProcess);
+                    nodeToProcess.setRelevantFactsInputWithParents(parentsNode);
+                }
+            }
 
             nodeToProcess.cleanInputAndOutputCertifiedPredicate();
             nodeToProcess.cleanPreconditionAndEffectsSMT();
@@ -2366,20 +2656,29 @@ public class LiftedTreePathEncoder {
 
             nodeToProcess.getAllRootsNodeThatCanLedToThisFlowFromParents(parentsNode);
 
-
-            // if (LiftedTreePathConfig.useSASPlusEncoding) {
-                // nodeToProcess.determinateHowToResolvePreconditionsWithLFG2(precondPredToGround, varsToDefine, pseudoFactTimeStep, groundPredTimeStep);
-            // } else {
+            if (LiftedTreePathConfig.accumulatePrecondtions) {
+                nodeToProcess.accumulatePrecondtionsAndCorrespondingAction(mapPreconditionToActions);
+            } else {
                 nodeToProcess.determinateHowToResolvePreconditionsWithoutLFG2(precondPredToGround, varsToDefine, this.pseudoFactsToDefine, this.groundFactsToDefine, pseudoFactsAlreadyDefined);
-            // }
+            }
+            
             
             // nodeToProcess.determinateHowToResolveEffectsWithoutLFG2(effectPredToGround, varsToDefine, predicateToFrameAxiomsAndEffectsNotYetDefined);
             nodeToProcess.determinateHowToResolveEffectsWithoutLFG3(effectPredToGround, varsToDefine, this.pseudoFactsToDefine, this.groundFactsToDefine, allPosPredicateWhichCanBeChangedByActionOfThisTimeStep, allNegPredicateWhichCanBeChangedByActionOfThisTimeStep, pseudoFactsAlreadyDefined);
 
-            System.out.println("Preconditions:\n" + nodeToProcess.preconditionsSMT);
-            System.out.println("Effects:\n" + nodeToProcess.effectsSMT);
+            // System.out.println("Preconditions:\n" + nodeToProcess.preconditionsSMT);
+            // System.out.println("Effects:\n" + nodeToProcess.effectsSMT);
 
             int a = 0;
+        }
+
+        if (LiftedTreePathConfig.accumulatePrecondtions) {
+
+            // We have accumalted all the precondition for this time step and the set of actions which can do these preconditions
+            // Generate the SMT for the preconditions
+            String precondtionsForThisTimeStep = UtilsStructureProblem.generatePreconditionsForPredicates(mapPreconditionToActions, stepFromRoot, precondPredToGround, varsToDefine, this.pseudoFactsToDefine, this.groundFactsToDefine, pseudoFactsAlreadyDefined);
+            this.preconditionsPerTimeStep.add(precondtionsForThisTimeStep);
+            mapPreconditionToActions.clear();
         }
 
         String rule13_precond = UtilsStructureProblem.generateRuleConversionPseudoFactToGroundFact(precondPredToGround, cliqueBitsToDefine, groundFactsToDefine, stepFromRoot, true);
@@ -2636,6 +2935,75 @@ public class LiftedTreePathEncoder {
         }
 
         return fluentToDisplay.toString();
+    }
+
+    private void changeFlowsScopesToReuseScopeVariables() {
+
+        // Create a list of all the scopes variables that can be shared
+        HashSet<ScopeVariable> scopesToShare = new HashSet<ScopeVariable>();
+
+        // Iterate over all the flows of the primitive tree in a topological order
+        for (LiftedFlow flow : this.primitiveTree.getNodesInTopologicalOrder()) {
+
+            if (flow.getScopeVariablesActionsFlow().size() > 1) {
+                System.out.println("ERROR : The flow " + flow.getUniqueName()
+                        + " has more than one scope variable. This is not supported yet.");
+                System.exit(1);
+            }
+
+            flow.scopesReplacedBy.clear();
+            flow.scopesSeen.clear();
+
+            // Update the scopeSeen and the scopeReplacedBy of the current flow by all of its parents
+            for (LiftedFlow parent : this.primitiveTree.getParents(flow)) {
+                flow.scopesSeen.addAll(parent.scopesSeen);
+                flow.scopesReplacedBy.putAll(parent.scopesReplacedBy);
+            }
+
+            if (scopesToShare.size() == 0) {
+                // There is no scope to share, so we can not reuse any variable
+                // Add all the scope variables of this flow to the list of scopes to share
+                scopesToShare.addAll(flow.getScopeVariablesActionsFlow().get(0));
+                flow.scopesSeen.addAll(flow.getScopeVariablesActionsFlow().get(0));
+            } 
+            else {
+                // Iterate over all the scope variables of the current flow
+                for (ScopeVariable scope : flow.getScopeVariablesActionsFlow().get(0)) {
+
+                    // If the scope is already replaced by another scope, then we can not reuse it
+                    if (flow.scopesReplacedBy.containsKey(scope)) {
+                        continue;
+                    }
+
+                    // If the flow is in the scopeSeen, then we can not change it
+                    if (flow.scopesSeen.contains(scope)) {
+                        continue;
+                    }
+
+                    // If the flow is in the scopeToShare, then we can not change it
+                    if (scopesToShare.contains(scope)) {
+                        continue;
+                    }
+
+                    // If we are here, then we can replace the scope variable by one of the reusable scope variables
+                    for (ScopeVariable scopeThatCanBeShared : scopesToShare) {
+                        // If we already contains this scope, then we can not reuse it
+                        if (flow.getScopeVariablesActionsFlow().get(0).contains(scopeThatCanBeShared)) {
+                            continue;
+                        }
+
+                        if (scopeThatCanBeShared.getPossibleValueVariable().equals(scope.getPossibleValueVariable())) {
+                            // Replace the scope variable by the one that is already in the list of
+                            // scopes to share
+                            flow.scopesReplacedBy.put(scope, scopeThatCanBeShared);
+                            break;
+                        }
+                    }
+
+                    // Up
+                }
+            }
+        }
     }
 
     /**
