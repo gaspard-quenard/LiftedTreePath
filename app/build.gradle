@@ -27,6 +27,12 @@ dependencies {
     //PDDL4J - DEVEL branch
     //last updated 23.02.23
     implementation(files('libs/pddl4j-4.0.0.jar'))
+
+    // Retrieve JavaSMT with Maven and transitive dependencies via a pom.xml
+	// compile 'org.sosy-lab:java-smt:3.7.0-61-gea80187e'
+
+    // Z3 api
+    implementation(files('libs/com.microsoft.z3.jar'))
 }
 
 application {
