@@ -65,8 +65,6 @@ public class LiftedTreePathEncoder {
 
     boolean DEBUG_DO_NOT_MERGE_ACTION = true;
 
-    private final LiftedTreePathConfig config;
-
     StringBuilder allClauses;
     Vector<String> allBoolVariables;
     Vector<String> allIntVariables;
@@ -160,8 +158,6 @@ public class LiftedTreePathEncoder {
 
         this.domainPath = domainPath;
         this.problemPath = problemPath;
-
-        this.config = new LiftedTreePathConfig(false, false, false, false);
 
         rule13PerTimeStep = new ArrayList<String>();
         frameAxiomsAndEffsPerTimeStep = new ArrayList<String>();
@@ -650,60 +646,69 @@ public class LiftedTreePathEncoder {
                 // Find all the certified predicate (predicate which we do know the value if we
                 // are in a current node)
                 System.out.println("Compute certified predicates primitive tree");
-                computeCertifiedPredicatesPrimitiveTree();
+                boolean ret = computeCertifiedPredicatesPrimitiveTree();
+                if (!ret) {
+                    // It means that the primitive tree is not valid. Generate a new one
+                    
+                } else {
 
-                // if (LiftedTreePathConfig.reuseScopeVariable) {
-                //     changeFlowsScopesToReuseScopeVariables();
-                // }
+                    // if (LiftedTreePathConfig.reuseScopeVariable) {
+                    //     changeFlowsScopesToReuseScopeVariables();
+                    // }
 
-                System.out.println("Encode SMT\n");
-                // Encode for SAT
-                // CleanAndOptimizePritmitivePaths();
-                try {
-                    encodeSAT();
-                } catch (IOException e) {
-                    // Handle the exception
-                    e.printStackTrace();
-                }
-
-                System.out.println("Launch solver on file");
-
-                // Run the SMT solver on the file
-                long beginSolverTime = System.currentTimeMillis();
-                String responseSMT = executeSMTSolverOnFile();
-                long endSolverTime = System.currentTimeMillis();
-                long solverTime = endSolverTime - beginSolverTime;
-                // if (LiftedTreePathConfig.DEBUG) 
-                {
-                    System.out.println("SMT solver time: " + solverTime + " ms");
-                }
-                this.totalSolverTime += solverTime;
-
-                if (fileIsSatisfiable(responseSMT)) {
-                    System.out.println("SAT solution found !");
-                    this.totalTime = System.currentTimeMillis() - this.beginTotalTime;
-
-                    System.out.println("Extract the hierarchy of the plan...\n");
-                    SequentialPlan plan = extractPlanAndHierarchyFromSolver(responseSMT);
-
-                    // Verify if the plan is valid
-                    System.out.println("Check if plan is valid...");
-                    boolean planIsValid;
+                    System.out.println("Encode SMT\n");
+                    // Encode for SAT
+                    // CleanAndOptimizePritmitivePaths();
                     try {
-                        planIsValid = validatePlan(problem, plan);
+                        if (LiftedTreePathConfig.useZ3Api) {
+                            encodeSATWithZ3API();
+                        } else {
+                            encodeSAT();
+                        }
                     } catch (IOException e) {
-                        System.out.println("Failed to check if plan is valid !\n");
-                        planIsValid = false;
+                        // Handle the exception
+                        e.printStackTrace();
                     }
 
-                    if (planIsValid) {
-                        System.out.println("Plan is valid !\n");
-                    } else {
-                        System.out.println("Plan is NOT valid !\n");
-                    }
+                    System.out.println("Launch solver on file");
 
-                    break;
-                }
+                    // Run the SMT solver on the file
+                    long beginSolverTime = System.currentTimeMillis();
+                    String responseSMT = executeSMTSolverOnFile();
+                    long endSolverTime = System.currentTimeMillis();
+                    long solverTime = endSolverTime - beginSolverTime;
+                    // if (LiftedTreePathConfig.DEBUG) 
+                    {
+                        System.out.println("SMT solver time: " + solverTime + " ms");
+                    }
+                    this.totalSolverTime += solverTime;
+
+                    if (fileIsSatisfiable(responseSMT)) {
+                        System.out.println("SAT solution found !");
+                        this.totalTime = System.currentTimeMillis() - this.beginTotalTime;
+
+                        System.out.println("Extract the hierarchy of the plan...\n");
+                        SequentialPlan plan = extractPlanAndHierarchyFromSolver(responseSMT);
+
+                        // Verify if the plan is valid
+                        System.out.println("Check if plan is valid...");
+                        boolean planIsValid;
+                        try {
+                            planIsValid = validatePlan(problem, plan);
+                        } catch (IOException e) {
+                            System.out.println("Failed to check if plan is valid !\n");
+                            planIsValid = false;
+                        }
+
+                        if (planIsValid) {
+                            System.out.println("Plan is valid !\n");
+                        } else {
+                            System.out.println("Plan is NOT valid !\n");
+                        }
+
+                        break;
+                    }
+                }   
             }
 
 
@@ -732,6 +737,7 @@ public class LiftedTreePathEncoder {
         }
         
 
+        System.out.println(LiftedTreePathConfig.reuseScopeVariable);
         System.out.println("Finishing executing at layer: " + this.layer);
         System.out.println("Total time execution: " + this.totalTime / 1000F + " s");
         System.out.println("Total solver time: " + this.totalSolverTime / 1000F + " s");
@@ -1192,7 +1198,7 @@ public class LiftedTreePathEncoder {
             }
         }
 
-        // Sort the actionsObkInPlan by how far they are from the root (attribute stepFromRoot) (done automatically by cvc5)
+        // Sort the actionsObjInPlan by how far they are from the root (attribute stepFromRoot) (done automatically by cvc5)
         if (useZ3Solver) {
             Collections.sort(actionsObjInPlan, new Comparator<LiftedFlow>() {
                 @Override
@@ -1608,6 +1614,11 @@ public class LiftedTreePathEncoder {
                 preconditionAlreadyDefinedForThisTimeStep = false;
             }
 
+            // If the action cannot be executed (because we know one of its precondition is false, we skip it)
+            if (!node.isActionExecutable()) {
+                continue;
+            }
+
             // Define the precondition of the node
             if (!LiftedTreePathConfig.accumulatePrecondtions) {
                 allClauses.append("; Precondition of " + node.getUniqueName() + "\n");
@@ -1648,115 +1659,123 @@ public class LiftedTreePathEncoder {
 
     private void encodeSATWithZ3API() throws IOException {
 
+        // Create a dictionary which will map the name of a variable to its z3 variable
+        HashMap<String, BoolExpr> mapNameToZ3Variable = new HashMap<String, BoolExpr>();
+
+        // Create the context
+        Context ctx = new Context();
+
+        // Create the solver
+        Solver solver = ctx.mkSolver();
+
+        BoolExpr cte = (BoolExpr) ctx.mkConst(ctx.mkSymbol("test"), ctx.mkBoolSort());
+
+        // Declare the scope variables
+        encodeDeclarationScopeVariablesSAT_Z3(ctx, solver, mapNameToZ3Variable);
+
+        // Declare all the flows path
+        declareAllMacroActionsPaths_Z3(ctx, solver, mapNameToZ3Variable);
+
+        // Write to a file to check if correct
+        System.out.println(solver.toString());
 
 
-        StringBuilder allClauses = new StringBuilder();
-        allClauses.append("(set-logic QF_SAT)\n");
-        allClauses.append("(set-option :produce-models true)\n");
+        // allClauses.append("; Declare all the ground predicates\n");
+        // allClauses.append(encodeDeclarationAllPredicateSAT2());
 
-        // Encode all objects
-        // allClauses.append("; Declare all of our objects and assign value to them\n");
-        // allClauses.append(encodeDeclarationAllObjectsSAT());
+        // if (LiftedTreePathConfig.useSASPlusEncoding) {
+        //     allClauses.append("; Declare all of our cliques bits\n");
+        //     allClauses.append(encodeDeclarationAllCliqueBitsSAT());
+        // }
 
-        // Then declare all of the initial predicates
-        // allClauses.append("; Declare all of our predciates initial values\n");
-        // allClauses.append(encodeDeclarationAllPredicateSAT());
-        allClauses.append("; Declare all the ground predicates\n");
-        allClauses.append(encodeDeclarationAllPredicateSAT2());
+        // // Then declare all of our flow actions
+        // allClauses.append("; declare all macro actions\n");
+        // allClauses.append(encodeDeclarationAllMacroActionsSAT());
 
-        if (LiftedTreePathConfig.useSASPlusEncoding) {
-            allClauses.append("; Declare all of our cliques bits\n");
-            allClauses.append(encodeDeclarationAllCliqueBitsSAT());
-        }
+        // // Then declare the all the variables scope (only the scope that can be taken by
+        // // the flows that will be encoded)
+        // allClauses.append("; declare all of our macro actions variable scope\n");
+        // allClauses.append(encodeDeclarationScopeVariablesSAT());
 
-        // Then declare all of our flow actions
-        allClauses.append("; declare all macro actions\n");
-        allClauses.append(encodeDeclarationAllMacroActionsSAT());
+        // // Then declare all of the possible flows path
+        // allClauses.append("; Declare all the macro actions paths\n");
+        // allClauses.append(declareAllMacroActionsPaths());
 
-        // Then declare the all the variables scope (only the scope that can be taken by
-        // the flows that will be encoded)
-        allClauses.append("; declare all of our macro actions variable scope\n");
-        allClauses.append(encodeDeclarationScopeVariablesSAT());
+        // // Declare all the substitution of a pseudo fact to a ground fact
+        // allClauses.append("; Declare all the substitution of a pseudo fact to a ground fact\n");
+        // allClauses.append(declareAllSubstitutionOfPseudoFactToGroundFact());
 
-        // Then declare all of the possible flows path
-        allClauses.append("; Declare all the macro actions paths\n");
-        allClauses.append(declareAllMacroActionsPaths());
+        // // Declare all the scopes that must be equals
+        // allClauses.append("; Declare all the scopes that must be equals\n");
+        // allClauses.append(declareAllScopesThatMustBeEquals());
 
-        // Declare all the substitution of a pseudo fact to a ground fact
-        allClauses.append("; Declare all the substitution of a pseudo fact to a ground fact\n");
-        allClauses.append(declareAllSubstitutionOfPseudoFactToGroundFact());
+        // // Then set the value for the initial predicates
+        // allClauses.append("; Initial values predicates: \n");
+        // allClauses.append(encodeSetInitialValueAllPredicateSAT());
 
-        // Declare all the scopes that must be equals
-        allClauses.append("; Declare all the scopes that must be equals\n");
-        allClauses.append(declareAllScopesThatMustBeEquals());
+        // // Add all the constrains on the scopes
+        // // allClauses.append("; Constrains on scopes\n");
+        // // allClauses.append(declaratationAllConstrainsOnScope());
 
-        // Then set the value for the initial predicates
-        allClauses.append("; Initial values predicates: \n");
-        allClauses.append(encodeSetInitialValueAllPredicateSAT());
+        // // Then, for each flows, indicate where it can take its precondition (either a
+        // // previous flow can satisfied it or it can take it from the initial predicate)
 
-        // Add all the constrains on the scopes
-        // allClauses.append("; Constrains on scopes\n");
-        // allClauses.append(declaratationAllConstrainsOnScope());
+        // int currentTimeStep = 0;
+        // boolean preconditionAlreadyDefinedForThisTimeStep = false;
 
-        // Then, for each flows, indicate where it can take its precondition (either a
-        // previous flow can satisfied it or it can take it from the initial predicate)
-
-        int currentTimeStep = 0;
-        boolean preconditionAlreadyDefinedForThisTimeStep = false;
-
-        allClauses.append("; For time step " + currentTimeStep + "\n");
-        for (LiftedFlow node : this.primitiveTree.getNodes()) {
+        // allClauses.append("; For time step " + currentTimeStep + "\n");
+        // for (LiftedFlow node : this.primitiveTree.getNodes()) {
             
-            if (node.getMaxStepFromRootNode() > currentTimeStep) {
-                allClauses.append("; For time step " + (currentTimeStep + 1) + "\n");
+        //     if (node.getMaxStepFromRootNode() > currentTimeStep) {
+        //         allClauses.append("; For time step " + (currentTimeStep + 1) + "\n");
 
-                // Define the rule13 for this time step
-                // allClauses.append("; Rule 13\n");
-                // allClauses.append(this.rule13PerTimeStep.get(currentTimeStep));
+        //         // Define the rule13 for this time step
+        //         // allClauses.append("; Rule 13\n");
+        //         // allClauses.append(this.rule13PerTimeStep.get(currentTimeStep));
 
-                // Define the frame axioms for this time step
-                allClauses.append("; Frame axioms\n");
-                allClauses.append(this.frameAxiomsAndEffsPerTimeStep.get(currentTimeStep));
+        //         // Define the frame axioms for this time step
+        //         allClauses.append("; Frame axioms\n");
+        //         allClauses.append(this.frameAxiomsAndEffsPerTimeStep.get(currentTimeStep));
 
-                currentTimeStep = node.getMaxStepFromRootNode();
-                preconditionAlreadyDefinedForThisTimeStep = false;
-            }
+        //         currentTimeStep = node.getMaxStepFromRootNode();
+        //         preconditionAlreadyDefinedForThisTimeStep = false;
+        //     }
 
-            // Define the precondition of the node
-            if (!LiftedTreePathConfig.accumulatePrecondtions) {
-                allClauses.append("; Precondition of " + node.getUniqueName() + "\n");
-                allClauses.append(node.preconditionsSMT);
-            } else {
-                if (!preconditionAlreadyDefinedForThisTimeStep && this.preconditionsPerTimeStep.size() >= currentTimeStep) {
-                    allClauses.append("; Preconditions\n");
-                    allClauses.append(this.preconditionsPerTimeStep.get(currentTimeStep));
-                    preconditionAlreadyDefinedForThisTimeStep = true;
-                }
-            }
+        //     // Define the precondition of the node
+        //     if (!LiftedTreePathConfig.accumulatePrecondtions) {
+        //         allClauses.append("; Precondition of " + node.getUniqueName() + "\n");
+        //         allClauses.append(node.preconditionsSMT);
+        //     } else {
+        //         if (!preconditionAlreadyDefinedForThisTimeStep && this.preconditionsPerTimeStep.size() >= currentTimeStep) {
+        //             allClauses.append("; Preconditions\n");
+        //             allClauses.append(this.preconditionsPerTimeStep.get(currentTimeStep));
+        //             preconditionAlreadyDefinedForThisTimeStep = true;
+        //         }
+        //     }
 
 
-            // Define the effects of the node
-            allClauses.append("; Effects of " + node.getUniqueName() + "\n");
-            allClauses.append(node.effectsSMT);
-        }
+        //     // Define the effects of the node
+        //     allClauses.append("; Effects of " + node.getUniqueName() + "\n");
+        //     allClauses.append(node.effectsSMT);
+        // }
 
-        // Declare the goal state (if there is one)
-        if (this.fluentsIdTrueGoal.size() > 0 || this.fluentsIdFalseGoal.size() > 0) {
-            allClauses.append("; Declare the goal state\n");
-            allClauses.append(encodeDeclarationGoalStateSAT());
-        }
+        // // Declare the goal state (if there is one)
+        // if (this.fluentsIdTrueGoal.size() > 0 || this.fluentsIdFalseGoal.size() > 0) {
+        //     allClauses.append("; Declare the goal state\n");
+        //     allClauses.append(encodeDeclarationGoalStateSAT());
+        // }
 
-        allClauses.append("(check-sat)\n");
-        allClauses.append("(get-model)\n");
-        allClauses.append("(exit)\n");
-        // Should be about it.
+        // allClauses.append("(check-sat)\n");
+        // allClauses.append("(get-model)\n");
+        // allClauses.append("(exit)\n");
+        // // Should be about it.
 
-        BufferedWriter writer = new BufferedWriter(new FileWriter(this.filenameSMT));
-        writer.write(allClauses.toString());
-        writer.flush();
-        writer.close();
+        // BufferedWriter writer = new BufferedWriter(new FileWriter(this.filenameSMT));
+        // writer.write(allClauses.toString());
+        // writer.flush();
+        // writer.close();
 
-        int a = 0;
+        // int a = 0;
     }
 
     private String encodeSetInitialValueAllPredicateSAT() {
@@ -1962,6 +1981,57 @@ public class LiftedTreePathEncoder {
         return declarationPredicates.toString();
     }
 
+
+    private String encodeDeclarationAllPredicateZ3() {
+        StringBuilder declarationPredicates = new StringBuilder();
+
+        // for (HashSet<String> groundPredicatesPerTimeStep : this.groundPredicatesToDefinePerTimeStep) {
+        //     for (String groundPredicate : groundPredicatesPerTimeStep) {
+        //         declarationPredicates.append("(declare-const " + groundPredicate + " Bool)\n");
+        //     } 
+        // }
+        for (String groundPredicate : this.groundFactsToDefine) {
+            declarationPredicates.append("(declare-const " + groundPredicate + " Bool)\n");
+        }
+
+        // Declare has well all the pseudo predicates
+        declarationPredicates.append("; Declare all the pseudo predicates\n");
+        // for (int timeStep = 0; timeStep < this.pseudoFactsToDefinePerTimeStep.size(); timeStep++) {
+        //     for (CertifiedPredicate pseudoFact : this.pseudoFactsToDefinePerTimeStep.get(timeStep)) {
+        //         declarationPredicates.append("(declare-const " + pseudoFact.toSmt(timeStep) + " Bool)\n");
+        //     }
+        // }
+
+        if (LiftedTreePathConfig.DEBUG) {
+            // Sort our pseudo facts by time step to be more readable (pseudo fact is in form name__timeStep)
+            HashSet<String> allPseudoFacts = this.pseudoFactsToDefine;
+            ArrayList<String> allPseudoFactsSorted = new ArrayList<>();
+            allPseudoFactsSorted.addAll(allPseudoFacts);
+            // Sort by time step
+
+            Collections.sort(allPseudoFactsSorted, new Comparator<String>() {
+                @Override
+                public int compare(String o1, String o2) {
+                    String[] o1Split = o1.split("__");
+                    String[] o2Split = o2.split("__");
+                    int o1TimeStep = Integer.parseInt(o1Split[o1Split.length - 1]);
+                    int o2TimeStep = Integer.parseInt(o2Split[o2Split.length - 1]);
+                    return o1TimeStep - o2TimeStep;
+                }
+            });
+            
+            for (String pseudoFact : allPseudoFactsSorted) {
+                declarationPredicates.append("(declare-const " + pseudoFact + " Bool)\n");
+            }
+        } else {
+            for (String pseudoFact : this.pseudoFactsToDefine) {
+                declarationPredicates.append("(declare-const " + pseudoFact + " Bool)\n");
+            }
+        }
+
+        return declarationPredicates.toString();
+    }
+
     private String encodeDeclarationAllCliqueBitsSAT() {
         StringBuilder declarationCliqueBits = new StringBuilder();
 
@@ -2055,6 +2125,10 @@ public class LiftedTreePathEncoder {
         // Consume all the node of the topological sort tree
         for (LiftedFlow node : this.primitiveTree.getNodesInTopologicalOrder()) {
 
+            if (!node.isActionExecutable()) {
+                continue;
+            }
+
             declarationMacroActions.append("; " + node + "\n");
 
             declarationMacroActions.append("(declare-const " +
@@ -2074,8 +2148,213 @@ public class LiftedTreePathEncoder {
         // Iterate over our primitive tree in a topological way
 
         // Map<Integer, String> flowToFormula = new HashMap<Integer, String>();
-        String[] flowToFormula = new String[this.primitiveTree.getNodes().size()];
-        HashSet<String> fullFormula = new HashSet<String>();
+        // String[] flowToFormula = new String[this.primitiveTree.getNodes().size()];
+        // HashSet<String> fullFormula = new HashSet<String>();
+        // ArrayList<ArrayList<LiftedFlow>> allConcurrentsActions = new ArrayList<>();
+        // int[] dictNodeToIdxConcurrentActions = new int[this.primitiveTree.getNodes().size()];
+        // for (int i = 0; i < this.primitiveTree.getNodes().size(); i++) {
+        //     dictNodeToIdxConcurrentActions[i] = -1;
+        // }
+
+        // // Consume all the node of the topological sort tree
+        // for (LiftedFlow node : this.primitiveTree.getNodesInTopologicalOrder()) {
+
+        //     Integer idxNode = this.primitiveTree.getNodes().indexOf(node);
+
+
+        //     // Add all concurrent actions in the at most list
+        //     if (this.primitiveTree.getChildrenNodesIdx().get(idxNode).size() > 1) {
+        //         // Check if those children are already in a HashSet
+        //         int idxMutexAction = -1;
+        //         for (Integer idxChild : this.primitiveTree.getChildrenNodesIdx().get(idxNode)) {
+        //             if (dictNodeToIdxConcurrentActions[idxChild] != -1) {
+        //                 idxMutexAction = dictNodeToIdxConcurrentActions[idxChild];
+        //                 break;
+        //             }
+        //         }
+        //         if (idxMutexAction == -1) {
+        //             allConcurrentsActions.add(new ArrayList<>());
+        //             idxMutexAction = allConcurrentsActions.size() - 1;
+        //         }
+        //         for (Integer idxChild : this.primitiveTree.getChildrenNodesIdx().get(idxNode)) {
+        //             if (!allConcurrentsActions.get(idxMutexAction).contains(this.primitiveTree.getNodes().get(idxChild))) {
+        //                 allConcurrentsActions.get(idxMutexAction).add(this.primitiveTree.getNodes().get(idxChild));
+        //                 dictNodeToIdxConcurrentActions[idxChild] = idxMutexAction;
+        //             }
+        //         }
+        //     }
+        //     if (this.primitiveTree.getParentsNodesIdx().get(idxNode).size() > 1) {
+        //         // Check if those children are already in a HashSet
+        //         int idxMutexAction = -1;
+        //         for (Integer idxParent : this.primitiveTree.getParentsNodesIdx().get(idxNode)) {
+        //             if (dictNodeToIdxConcurrentActions[idxParent] != -1) {
+        //                 idxMutexAction = dictNodeToIdxConcurrentActions[idxParent];
+        //                 break;
+        //             }
+        //         }
+        //         if (idxMutexAction == -1) {
+        //             allConcurrentsActions.add(new ArrayList<>());
+        //             idxMutexAction = allConcurrentsActions.size() - 1;
+        //         }
+        //         for (Integer idxParent : this.primitiveTree.getParentsNodesIdx().get(idxNode)) {
+        //             if (!allConcurrentsActions.get(idxMutexAction).contains(this.primitiveTree.getNodes().get(idxParent))) {
+        //                 allConcurrentsActions.get(idxMutexAction).add(this.primitiveTree.getNodes().get(idxParent));
+        //                 dictNodeToIdxConcurrentActions[idxParent] = idxMutexAction;
+        //             }
+
+        //         }
+        //     }
+        // }
+
+        // allMacroActionsPath.append("(assert (or\n");
+        // for (String path : fullFormula) {
+        // allMacroActionsPath.append(path + " \n");
+        // }
+        // allMacroActionsPath.append("))\n");
+
+        // One of the root action should be true
+        allMacroActionsPath.append("; one of the root action should be true\n");
+        allMacroActionsPath.append("(assert (or ");
+        for (Integer rootNode : this.primitiveTree.getRootNodesIdx()) {
+            LiftedFlow node = this.primitiveTree.getNodes().get(rootNode);
+            if (!node.isActionExecutable()) {
+                continue;
+            }
+            allMacroActionsPath.append(this.primitiveTree.getNodes().get(rootNode).getUniqueName() + " ");
+        }
+        allMacroActionsPath.append("))\n");
+
+        allMacroActionsPath.append("; action true => one of its child action is true\n");
+        // Consume all the node of the topological sort tree
+        for (LiftedFlow node : this.primitiveTree.getNodesInTopologicalOrder()) {
+            Integer idxNode = this.primitiveTree.getNodes().indexOf(node);
+            HashSet<Integer> childrenNode = this.primitiveTree.getChildrenNodesIdx().get(idxNode);
+
+            // Filter the children node to only keep the one where the action is executable
+            childrenNode.removeIf(idxChild -> !this.primitiveTree.getNodes().get(idxChild).isActionExecutable());
+
+            if (childrenNode.size() == 0) {
+                continue;
+            }
+
+            else if (childrenNode.size() == 1) {
+                LiftedFlow childNode = this.primitiveTree.getNodes().get(childrenNode.iterator().next());
+                allMacroActionsPath
+                        .append("(assert (=> " + node.getUniqueName() + " " + childNode.getUniqueName() + "))\n");
+            }
+
+            else {
+                allMacroActionsPath.append("(assert (=> " + node.getUniqueName() + " (or ");
+                for (Integer idxChild : this.primitiveTree.getChildrenNodesIdx().get(idxNode)) {
+                    allMacroActionsPath.append(this.primitiveTree.getNodes().get(idxChild).getUniqueName() + " ");
+                }
+                allMacroActionsPath.append(")))\n");
+            }
+        }
+
+        // TEST DO THE SAME THINGS FOR THE PARENTS
+        if (LiftedTreePathConfig.addClauseActionTrueImpliesOneOfItsParentIsTrue) {
+            allMacroActionsPath.append("; action true => one of its parent action is true\n");
+            for (LiftedFlow node : this.primitiveTree.getNodesInTopologicalOrder()) {
+                Integer idxNode = this.primitiveTree.getNodes().indexOf(node);
+                HashSet<Integer> parentsNode = this.primitiveTree.getParentsNodesIdx().get(idxNode);
+
+                // Filter the children node to only keep the one where the action is executable
+                parentsNode.removeIf(idxParent -> !this.primitiveTree.getNodes().get(idxParent).isActionExecutable());
+
+                if (parentsNode.size() == 0) {
+                    continue;
+                }
+
+                else if (parentsNode.size() == 1) {
+                    LiftedFlow parentNode = this.primitiveTree.getNodes().get(parentsNode.iterator().next());
+                    allMacroActionsPath
+                            .append("(assert (=> " + node.getUniqueName() + " " + parentNode.getUniqueName() + "))\n");
+                }
+
+                else {
+                    allMacroActionsPath.append("(assert (=> " + node.getUniqueName() + " (or ");
+                    for (Integer idxChild : this.primitiveTree.getParentsNodesIdx().get(idxNode)) {
+                        allMacroActionsPath.append(this.primitiveTree.getNodes().get(idxChild).getUniqueName() + " ");
+                    }
+                    allMacroActionsPath.append(")))\n");
+                }
+            }
+        }
+        // END TEST
+
+        // Add as well the at most one action for all concurrents actions
+        allMacroActionsPath.append("; at most one action\n");
+        HashSet<String> pairAlreadySeen = new HashSet<String>();
+        // Consume all the node of the topological sort tree
+        for (LiftedFlow node : this.primitiveTree.getNodesInTopologicalOrder()) {
+
+            if (!node.isActionExecutable()) {
+                continue;
+            }
+
+            Integer idxNode = this.primitiveTree.getNodes().indexOf(node);
+
+            if (this.primitiveTree.getParentsNodesIdx().get(idxNode).size() > 1) {
+
+                List<Integer> concurrentIdxActionList = new ArrayList<>(
+                        this.primitiveTree.getParentsNodesIdx().get(idxNode));
+                // All thoses actions should be mutex
+                for (int i = 0; i < concurrentIdxActionList.size(); i++) {
+                    for (int j = i + 1; j < concurrentIdxActionList.size(); j++) {
+                        int idxParentNode1 = concurrentIdxActionList.get(i);
+                        int idxParentNode2 = concurrentIdxActionList.get(j);
+                        int min = Math.min(idxParentNode1, idxParentNode2);
+                        int max = Math.max(idxParentNode1, idxParentNode2);
+                        String key = min + "_" + max;
+                        if (!pairAlreadySeen.contains(key)) {
+                            allMacroActionsPath
+                                    .append("(assert (or (not " + this.primitiveTree.getNodes().get(min).getUniqueName()
+                                            + ") (not " + this.primitiveTree.getNodes().get(max).getUniqueName() + ")))\n");
+                            pairAlreadySeen.add(key);
+                        }
+                    }
+                }
+
+            }
+
+            if (this.primitiveTree.getChildrenNodesIdx().get(idxNode).size() > 1) {
+
+                List<Integer> concurrentIdxActionList = new ArrayList<>(
+                        this.primitiveTree.getChildrenNodesIdx().get(idxNode));
+                // All thoses actions should be mutex
+                for (int i = 0; i < concurrentIdxActionList.size(); i++) {
+                    for (int j = i + 1; j < concurrentIdxActionList.size(); j++) {
+                        int idxChildNode1 = concurrentIdxActionList.get(i);
+                        int idxChildNode2 = concurrentIdxActionList.get(j);
+                        int min = Math.min(idxChildNode1, idxChildNode2);
+                        int max = Math.max(idxChildNode1, idxChildNode2);
+                        String key = min + "_" + max;
+                        if (!pairAlreadySeen.contains(key)) {
+                            allMacroActionsPath
+                                    .append("(assert (or (not " + this.primitiveTree.getNodes().get(min).getUniqueName()
+                                            + ") (not " + this.primitiveTree.getNodes().get(max).getUniqueName() + ")))\n");
+                            pairAlreadySeen.add(key);
+                        }
+                    }
+                }
+
+            }
+
+        }
+        return allMacroActionsPath.toString();
+    }
+
+
+    private void declareAllMacroActionsPaths_Z3(Context ctx, Solver solver, HashMap<String, BoolExpr> mapNameToZ3Variable) {
+
+        StringBuilder allMacroActionsPath = new StringBuilder();
+
+        // I've come up with an algo for that, but I do not know if it is the most
+        // optimal
+        // Iterate over our primitive tree in a topological way
+
+        // Map<Integer, String> flowToFormula = new HashMap<Integer, String>();
         ArrayList<ArrayList<LiftedFlow>> allConcurrentsActions = new ArrayList<>();
         int[] dictNodeToIdxConcurrentActions = new int[this.primitiveTree.getNodes().size()];
         for (int i = 0; i < this.primitiveTree.getNodes().size(); i++) {
@@ -2132,22 +2411,58 @@ public class LiftedTreePathEncoder {
             }
         }
 
-        // allMacroActionsPath.append("(assert (or\n");
-        // for (String path : fullFormula) {
-        // allMacroActionsPath.append(path + " \n");
+        // One of the root action should be true
+        // allMacroActionsPath.append("; one of the root action should be true\n");
+        // allMacroActionsPath.append("(assert (or ");
+        // for (Integer rootNode : this.primitiveTree.getRootNodesIdx()) {
+        //     allMacroActionsPath.append(this.primitiveTree.getNodes().get(rootNode).getUniqueName() + " ");
         // }
         // allMacroActionsPath.append("))\n");
 
-        // One of the root action should be true
-        allMacroActionsPath.append("; one of the root action should be true\n");
-        allMacroActionsPath.append("(assert (or ");
+        ArrayList<BoolExpr> allRootNodes = new ArrayList<BoolExpr>();
+            
         for (Integer rootNode : this.primitiveTree.getRootNodesIdx()) {
-            allMacroActionsPath.append(this.primitiveTree.getNodes().get(rootNode).getUniqueName() + " ");
+            // Create the z3 expression
+            LiftedFlow node = this.primitiveTree.getNodes().get(rootNode);
+            BoolExpr boolExpr = ctx.mkBoolConst(node.getUniqueName());
+            // Add it to the hashmap
+            mapNameToZ3Variable.put(node.getUniqueName(), boolExpr);
+            // Add it to the set of possible values
+            allRootNodes.add(boolExpr);
         }
-        allMacroActionsPath.append("))\n");
+            
+        // Make a or between all the possible values
+        BoolExpr orAllRootNodes = ctx.mkOr(allRootNodes.toArray(new BoolExpr[allRootNodes.size()]));
 
-        allMacroActionsPath.append("; action true => one of its child action is true\n");
+        // Add the constraint to the solver
+        solver.add(orAllRootNodes);
+        
+
+        // allMacroActionsPath.append("; action true => one of its child action is true\n");
         // Consume all the node of the topological sort tree
+        // for (LiftedFlow node : this.primitiveTree.getNodesInTopologicalOrder()) {
+        //     Integer idxNode = this.primitiveTree.getNodes().indexOf(node);
+        //     HashSet<Integer> childrenNode = this.primitiveTree.getChildrenNodesIdx().get(idxNode);
+
+        //     if (childrenNode.size() == 0) {
+        //         continue;
+        //     }
+
+        //     else if (childrenNode.size() == 1) {
+        //         LiftedFlow childNode = this.primitiveTree.getNodes().get(childrenNode.iterator().next());
+        //         allMacroActionsPath
+        //                 .append("(assert (=> " + node.getUniqueName() + " " + childNode.getUniqueName() + "))\n");
+        //     }
+
+        //     else {
+        //         allMacroActionsPath.append("(assert (=> " + node.getUniqueName() + " (or ");
+        //         for (Integer idxChild : this.primitiveTree.getChildrenNodesIdx().get(idxNode)) {
+        //             allMacroActionsPath.append(this.primitiveTree.getNodes().get(idxChild).getUniqueName() + " ");
+        //         }
+        //         allMacroActionsPath.append(")))\n");
+        //     }
+        // }
+
         for (LiftedFlow node : this.primitiveTree.getNodesInTopologicalOrder()) {
             Integer idxNode = this.primitiveTree.getNodes().indexOf(node);
             HashSet<Integer> childrenNode = this.primitiveTree.getChildrenNodesIdx().get(idxNode);
@@ -2155,19 +2470,29 @@ public class LiftedTreePathEncoder {
             if (childrenNode.size() == 0) {
                 continue;
             }
-
-            else if (childrenNode.size() == 1) {
-                LiftedFlow childNode = this.primitiveTree.getNodes().get(childrenNode.iterator().next());
-                allMacroActionsPath
-                        .append("(assert (=> " + node.getUniqueName() + " " + childNode.getUniqueName() + "))\n");
-            }
-
             else {
-                allMacroActionsPath.append("(assert (=> " + node.getUniqueName() + " (or ");
+                ArrayList<BoolExpr> allChildrenNodes = new ArrayList<BoolExpr>();
                 for (Integer idxChild : this.primitiveTree.getChildrenNodesIdx().get(idxNode)) {
-                    allMacroActionsPath.append(this.primitiveTree.getNodes().get(idxChild).getUniqueName() + " ");
+                    // Get the node
+                    LiftedFlow childNode = this.primitiveTree.getNodes().get(idxChild);
+                    // Check if we have it into our hashmap
+                    if (mapNameToZ3Variable.containsKey(childNode.getUniqueName())) {
+                        allChildrenNodes.add(mapNameToZ3Variable.get(childNode.getUniqueName()));
+                    } else {
+                        // Create the bool expression
+                        BoolExpr boolExpr = ctx.mkBoolConst(childNode.getUniqueName());
+                        // Add it into our hashmap
+                        mapNameToZ3Variable.put(childNode.getUniqueName(), boolExpr);
+                        allChildrenNodes.add(mapNameToZ3Variable.get(childNode.getUniqueName()));
+                    }
                 }
-                allMacroActionsPath.append(")))\n");
+                
+                // Parent node => or (ChildNodes)
+                BoolExpr orAllChildrenNodes = ctx.mkOr(allChildrenNodes.toArray(new BoolExpr[allChildrenNodes.size()]));
+
+                // Add the constraint to the solver
+                solver.add(ctx.mkImplies(mapNameToZ3Variable.get(node.getUniqueName()), orAllChildrenNodes));
+
             }
         }
 
@@ -2191,9 +2516,12 @@ public class LiftedTreePathEncoder {
                         int max = Math.max(idxParentNode1, idxParentNode2);
                         String key = min + "_" + max;
                         if (!pairAlreadySeen.contains(key)) {
-                            allMacroActionsPath
-                                    .append("(assert (or (not " + this.primitiveTree.getNodes().get(min).getUniqueName()
-                                            + ") (not " + this.primitiveTree.getNodes().get(max).getUniqueName() + ")))\n");
+                            // allMacroActionsPath
+                                    // .append("(assert (or (not " + this.primitiveTree.getNodes().get(min).getUniqueName()
+                                            // + ") (not " + this.primitiveTree.getNodes().get(max).getUniqueName() + ")))\n");
+
+                            // Add the constraint to the solver
+                            solver.add(ctx.mkOr(ctx.mkNot(mapNameToZ3Variable.get(this.primitiveTree.getNodes().get(min).getUniqueName())), ctx.mkNot(mapNameToZ3Variable.get(this.primitiveTree.getNodes().get(max).getUniqueName()))));
                             pairAlreadySeen.add(key);
                         }
                     }
@@ -2214,9 +2542,12 @@ public class LiftedTreePathEncoder {
                         int max = Math.max(idxChildNode1, idxChildNode2);
                         String key = min + "_" + max;
                         if (!pairAlreadySeen.contains(key)) {
-                            allMacroActionsPath
-                                    .append("(assert (or (not " + this.primitiveTree.getNodes().get(min).getUniqueName()
-                                            + ") (not " + this.primitiveTree.getNodes().get(max).getUniqueName() + ")))\n");
+                            // allMacroActionsPath
+                            //         .append("(assert (or (not " + this.primitiveTree.getNodes().get(min).getUniqueName()
+                            //                 + ") (not " + this.primitiveTree.getNodes().get(max).getUniqueName() + ")))\n");
+
+                            // Add the constraint to the solver
+                            solver.add(ctx.mkOr(ctx.mkNot(mapNameToZ3Variable.get(this.primitiveTree.getNodes().get(min).getUniqueName())), ctx.mkNot(mapNameToZ3Variable.get(this.primitiveTree.getNodes().get(max).getUniqueName()))));
                             pairAlreadySeen.add(key);
                         }
                     }
@@ -2225,7 +2556,6 @@ public class LiftedTreePathEncoder {
             }
 
         }
-        return allMacroActionsPath.toString();
     }
 
     private String encodeDeclarationScopeVariablesSAT() {
@@ -2233,44 +2563,6 @@ public class LiftedTreePathEncoder {
 
         HashSet<ScopeVariable> scopeAlreadyDeclared = new HashSet<ScopeVariable>();
 
-        // for (LiftedFlow flow : this.primitiveTree.getNodes()) {
-        //     if (flow.getUniqueName().equals("FLOW_A_m14_everyone_go_hiking-m6_prepare_trip-m9_bring_tent-nop%15")) {
-        //         int debug = 0;
-        //     }
-        //     for (ArrayList<ScopeVariable> arrayScope : flow.getScopeVariablesActionsFlow()) {
-        //         for (ScopeVariable scopeVariable : arrayScope) {
-        //             if (!scopeAlreadyDeclared.contains(scopeVariable) && !scopeVariable.isConstant()) {
-
-        //                 for (String value : scopeVariable.getPossibleValueVariable()) {
-        //                     declarationScopeVariables.append("(declare-const " + scopeVariable.getUniqueName() + "__" + value + " Bool)\n");
-        //                 }
-        //                 // Indicate as well all the different value that this scope variable can take
-
-        //                 declarationScopeVariables.append("(assert (or ");
-        //                 for (String value : scopeVariable.getPossibleValueVariable()) {
-        //                     // declarationScopeVariables
-        //                     //         .append("(= " + scopeVariable.getUniqueName() + " " + value + ") ");
-        //                     declarationScopeVariables
-        //                             .append(scopeVariable.getUniqueName() + "__" + value + " ");
-        //                 }
-        //                 declarationScopeVariables.append("))\n");
-
-        //                 // Indicate as well that the scope variable can take at most one value
-        //                 // HashSet<String> valuesToIterate = scopeVariable.getPossibleValueVariable();
-        //                 ArrayList<String> valuesOfScope = new ArrayList<String>(scopeVariable.getPossibleValueVariable());
-        //                 for (int i = 0; i < valuesOfScope.size(); i++) {
-        //                     for (int j = i + 1; j < valuesOfScope.size(); j++) {
-        //                         declarationScopeVariables.append("(assert (or (not " + scopeVariable.getUniqueName()
-        //                                 + "__" + valuesOfScope.get(i) + ") (not " + scopeVariable.getUniqueName() + "__"
-        //                                 + valuesOfScope.get(j) + ")))\n");
-        //                     }
-        //                 }
-
-        //                 scopeAlreadyDeclared.add(scopeVariable);
-        //             }
-        //         }
-        //     }
-        // }
 
         for (ScopeVariable scopeVariable : this.scopeVarsToDefine) {
             if (!scopeVariable.isConstant()) {
@@ -2317,6 +2609,60 @@ public class LiftedTreePathEncoder {
             }
         }
         return declarationScopeVariables.toString();
+    }
+
+
+    private void encodeDeclarationScopeVariablesSAT_Z3(Context ctx, Solver solver, HashMap<String, BoolExpr> scopeVariables) {
+
+        for (ScopeVariable scopeVariable : this.scopeVarsToDefine) {
+            if (!scopeVariable.isConstant()) {
+
+                ArrayList<BoolExpr> allPossibleValues = new ArrayList<BoolExpr>();
+
+                for (String value : scopeVariable.getPossibleValueVariable()) {
+                    // Create the BoolExpr
+                    BoolExpr boolExpr = ctx.mkBoolConst(scopeVariable.getUniqueName() + "__" + value);
+                    // Add it to the hashmap
+                    scopeVariables.put(scopeVariable.getUniqueName() + "__" + value, boolExpr);
+                    // Add it to the set of possible values
+                    allPossibleValues.add(boolExpr);
+                }
+                
+                // Make a or between all the possible values
+                BoolExpr orAllPossibleValues = ctx.mkOr(allPossibleValues.toArray(new BoolExpr[allPossibleValues.size()]));
+
+
+                // Indicate as well that the scope variable can take at most one value
+
+                if (LiftedTreePathConfig.optimizedAtMostOne) {
+                    //(assert ((_ at-most 1) SCOPE_492__city_loc_0 SCOPE_492__city_loc_1))
+                    // declarationScopeVariables.append("(assert ((_ at-most 1) ");
+                    // for (String value : scopeVariable.getPossibleValueVariable()) {
+                    //     declarationScopeVariables
+                    //             .append(scopeVariable.getUniqueName() + "__" + value + " ");
+                    // }
+                    // declarationScopeVariables.append("))\n");
+
+                    solver.add(ctx.mkAtMost(allPossibleValues.toArray(new BoolExpr[allPossibleValues.size()]), 1));
+
+                }
+                else {
+                    // for (int i = 0; i < valuesOfScope.size(); i++) {
+                    //     for (int j = i + 1; j < valuesOfScope.size(); j++) {
+                    //         declarationScopeVariables.append("(assert (or (not " + scopeVariable.getUniqueName()
+                    //                 + "__" + valuesOfScope.get(i) + ") (not " + scopeVariable.getUniqueName() + "__"
+                    //                 + valuesOfScope.get(j) + ")))\n");
+                    //     }
+                    // }
+
+                    for (int i = 0; i < allPossibleValues.size(); i++) {
+                        for (int j = i + 1; j < allPossibleValues.size(); j++) {
+                            solver.add(ctx.mkOr(ctx.mkNot(allPossibleValues.get(i)), ctx.mkNot(allPossibleValues.get(j))));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     
@@ -2487,7 +2833,7 @@ public class LiftedTreePathEncoder {
      * that are true depending of the parent used (for the input (before the action
      * is called), and for the output (afer the action is called))
      */
-    private void computeCertifiedPredicatesPrimitiveTree() {
+    private boolean computeCertifiedPredicatesPrimitiveTree() {
 
         System.out.println("Compute input and output certified predicates...\n");
 
@@ -2498,7 +2844,6 @@ public class LiftedTreePathEncoder {
         }
 
 
-        int currentStepToProcess = 0;
 
         
         if (LiftedTreePathConfig.useSASPlusEncoding) {
@@ -2558,11 +2903,17 @@ public class LiftedTreePathEncoder {
         HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allPosPredicateWhichCanBeChangedByActionOfThisTimeStep = new HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>>();
         HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allNegPredicateWhichCanBeChangedByActionOfThisTimeStep = new HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>>();
 
+        boolean primitiveTreeIsExecutable = false;
+
         // Consume all the node of the topological sort tree
         for (LiftedFlow nodeToProcess : this.primitiveTree.getNodesInTopologicalOrder()) {
 
+            nodeToProcess.setIsActionExecutable(true);
+
             // Get the time step of the node
             int stepNodeToIterate = nodeToProcess.getMaxStepFromRootNode();
+
+            // System.out.println(nodeToProcess.getUniqueName() + " ("  + stepNodeToIterate + ")");
 
             // If it is greated that the step from Root, we can execute the frame axioms and clear them afterward
             if (stepNodeToIterate > stepFromRoot) {
@@ -2625,23 +2976,12 @@ public class LiftedTreePathEncoder {
 
                 // Increment the step from root
                 stepFromRoot = stepNodeToIterate;
-
-
             }
 
 
             // System.out.println("==========");
             // System.out.println("Current Node: " + nodeToProcess.getUniqueName() + " (" + nodeToProcess.getMaxStepFromRootNode() + ")");
 
-            if (LiftedTreePathConfig.restrictRangeScopeVars) {
-                if (stepFromRoot == 0) {
-                    nodeToProcess.setRelevantFactsInputWithInitState(this.fluentsIdTrueInit);
-                } else {
-                    //  Get all the parents of this node
-                    HashSet<LiftedFlow> parentsNode = this.primitiveTree.getParents(nodeToProcess);
-                    nodeToProcess.setRelevantFactsInputWithParents(parentsNode);
-                }
-            }
 
             nodeToProcess.cleanInputAndOutputCertifiedPredicate();
             nodeToProcess.cleanPreconditionAndEffectsSMT();
@@ -2652,9 +2992,44 @@ public class LiftedTreePathEncoder {
 
             HashSet<LiftedFlow> parentsNode = this.primitiveTree.getParents(nodeToProcess);
 
+            // If all parents of this node are impossible, this node cannot be executed as well
+            boolean atLeastOneParentIsExecutable = false;
+            if (parentsNode.size() == 0) {
+                atLeastOneParentIsExecutable = true;
+            }
+            for (LiftedFlow parent : parentsNode) {
+                if (parent.isActionExecutable()) {
+                    atLeastOneParentIsExecutable = true;
+                    break;
+                }
+            }
+            if (!atLeastOneParentIsExecutable) {
+                // System.out.println("All parents of " + nodeToProcess.getUniqueName() + " are impossible");
+                nodeToProcess.setIsActionExecutable(false);
+                continue;
+            }
+
             nodeToProcess.computePreconditionsAndDefaultOutputCertifiedPredicates2WithoutLFG(this.staticPredicates, this.liftedFamGroups, this.dictConstantToScopeVariable);
 
             nodeToProcess.getAllRootsNodeThatCanLedToThisFlowFromParents(parentsNode);
+
+            if (LiftedTreePathConfig.restrictRangeScopeVarsWithRelevantFacts) {
+
+                nodeToProcess.setRelevantFactsInputWithParents(parentsNode);
+                nodeToProcess.pruneScopesVarWithRelevantInputFacts();
+            }
+
+            if (!nodeToProcess.isActionExecutable()) {
+                System.out.println(nodeToProcess.getUniqueName() + " is impossible !");
+                continue;
+            }
+
+            if (this.primitiveTree.getChildren(nodeToProcess).size() == 0) {
+                // A leaf node is always executable
+                primitiveTreeIsExecutable = true;
+            }
+
+            // atLeastOneActionIsExecutableForThisTimeStep = true;
 
             if (LiftedTreePathConfig.accumulatePrecondtions) {
                 nodeToProcess.accumulatePrecondtionsAndCorrespondingAction(mapPreconditionToActions);
@@ -2691,8 +3066,8 @@ public class LiftedTreePathEncoder {
                 this.rule13PerTimeStep.add(rule13_precond);
                 this.rule13PerTimeStep.add(rule13_effects);
 
-                System.out.println(rule13_precond);
-                System.out.println(rule13_effects);
+                // System.out.println(rule13_precond);
+                // System.out.println(rule13_effects);
 
                 // StringBuilder allEffsAndFrameAxioms = new StringBuilder();
                 // for (EffActionsAndFrameAxioms effActionsAndFrameAxioms : predicateToFrameAxiomsAndEffectsNotYetDefined) {
@@ -2723,6 +3098,7 @@ public class LiftedTreePathEncoder {
         // this.rule13PerTimeStep.add(rule13_effects);
 
         int b = 0;
+        return primitiveTreeIsExecutable;
     }
 
     private void preprocessing() {

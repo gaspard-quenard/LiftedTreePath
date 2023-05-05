@@ -50,6 +50,8 @@ public class UtilsStructureProblem {
 
     private static int nbPredicates;
 
+    private static HashSet<Integer> factsTrueAtInit;
+
     private static ArrayList<ArrayList<Integer>> cliques;
 
     // Indicate all the scope that must be equal (rule 18/19 lilotane paper when a negative predicate is identical to a positive predicate for the effect of an action)
@@ -542,6 +544,9 @@ public class UtilsStructureProblem {
                 }
             }
         }
+
+        UtilsStructureProblem.factsTrueAtInit = new HashSet<Integer>();
+        UtilsStructureProblem.factsTrueAtInit.addAll(predicateTrueAtInitStateTemp);
     }
 
 
@@ -1838,5 +1843,9 @@ public class UtilsStructureProblem {
 
      static public HashSet<ScopesEqual> getAllScopesThatMustBeEquals() {
         return UtilsStructureProblem.scopesEquals;
+     }
+
+     static public HashSet<Integer> getAllFactsIdTrueAtInit() {
+        return UtilsStructureProblem.factsTrueAtInit;
      }
 }

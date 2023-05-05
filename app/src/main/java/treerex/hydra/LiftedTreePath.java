@@ -18,6 +18,7 @@ import fr.uga.pddl4j.planners.LogLevel;
 import fr.uga.pddl4j.problem.DefaultProblem;
 import picocli.CommandLine;
 import treerex.hydra.Encoder.LiftedTreePathEncoder;
+import treerex.hydra.SolverConfig.LiftedTreePathConfig;
 
 @CommandLine.Command(name = "LiftedTreePath", version = "LiftedTreePath 0.1", description = "Solves a specified classical problem using SMT encoding.", sortOptions = false, mixinStandardHelpOptions = true, headerHeading = "Usage:%n", synopsisHeading = "%n", descriptionHeading = "%nDescription:%n%n", parameterListHeading = "%nParameters:%n", optionListHeading = "%nOptions:%n")
 public class LiftedTreePath implements Callable<Integer> {
@@ -65,6 +66,17 @@ public class LiftedTreePath implements Callable<Integer> {
             "--problem_path" }, paramLabel = "<problemPath>", description = "Path of the problem file", required = true)
     public void setProblemPath(final String problemPath) {
         this.problemPath = problemPath;
+    }
+
+
+        /**
+     * Command line option to set the problem path
+     * 
+     * @param domainPath the path of the problem file
+     */
+    @CommandLine.Option(names = { "--reuseScopeVar", }, description = "Reuse the same scope variable as param for actions which cannot occur at the same time", required = false)
+    public void configReuseScopeVar(final boolean reuseScopeVar) {
+        LiftedTreePathConfig.reuseScopeVariable = reuseScopeVar;
     }
 
     @Override

@@ -54,9 +54,14 @@ public class LiftedFlow {
     HashSet<CertifiedPredicate> preconditionPredicates;
     HashSet<CertifiedPredicate> effectPredicates;
 
-    // Facts that we know for sure that they are true (before and after the effects of the action have been applied)
-    HashSet<Integer> relevantFactsIdInput;
-    HashSet<Integer> relevantFactsIdOutput;
+    // If an action cannot be executed because we know that one of its preconditions is false, then we can set the flag named "isActive" to false
+    boolean isActionExecutable = true;
+
+    // Facts that may be true/false (before and after the effects of the action have been applied)
+    HashSet<Integer> relevantPosFactsIdInput;
+    HashSet<Integer> relevantNegFactsIdInput;
+    HashSet<Integer> relevantPosFactsIdOutput;
+    HashSet<Integer> relevantNegFactsIdOutput;
 
 
     HashSet<LiftedFlow> rootsNodesWhichCanLedToThisFlow;
@@ -94,8 +99,10 @@ public class LiftedFlow {
             // inheritPreconditionsFromParentLFG(parentFlow, methodNameToObject, liftedFamGroups);
         }
 
-        this.relevantFactsIdInput = new HashSet<Integer>();
-        this.relevantFactsIdOutput = new HashSet<Integer>();
+        this.relevantPosFactsIdInput = new HashSet<Integer>();
+        this.relevantNegFactsIdInput = new HashSet<Integer>();
+        this.relevantPosFactsIdOutput = new HashSet<Integer>();
+        this.relevantNegFactsIdOutput = new HashSet<Integer>();
 
         this.uniqueId = LiftedFlow.numberLiftedFlow;
         LiftedFlow.numberLiftedFlow++;
@@ -143,8 +150,10 @@ public class LiftedFlow {
         this.preconditionPredicates = new HashSet<CertifiedPredicate>();
         this.effectPredicates = new HashSet<CertifiedPredicate>();
 
-        this.relevantFactsIdInput = new HashSet<Integer>();
-        this.relevantFactsIdOutput = new HashSet<Integer>();
+        this.relevantPosFactsIdInput = new HashSet<Integer>();
+        this.relevantNegFactsIdInput = new HashSet<Integer>();
+        this.relevantPosFactsIdOutput = new HashSet<Integer>();
+        this.relevantNegFactsIdOutput = new HashSet<Integer>();
 
         this.scopesSeen = new HashSet<ScopeVariable>();
         this.scopesReplacedBy = new HashMap<ScopeVariable, ScopeVariable>();
@@ -185,8 +194,10 @@ public class LiftedFlow {
         this.preconditionPredicates = new HashSet<CertifiedPredicate>();
         this.effectPredicates = new HashSet<CertifiedPredicate>();
 
-        this.relevantFactsIdInput = new HashSet<Integer>();
-        this.relevantFactsIdOutput = new HashSet<Integer>();
+        this.relevantPosFactsIdInput = new HashSet<Integer>();
+        this.relevantNegFactsIdInput = new HashSet<Integer>();
+        this.relevantPosFactsIdOutput = new HashSet<Integer>();
+        this.relevantNegFactsIdOutput = new HashSet<Integer>();
 
         this.scopesSeen = new HashSet<ScopeVariable>();
         this.scopesReplacedBy = new HashMap<ScopeVariable, ScopeVariable>();
@@ -784,8 +795,11 @@ public class LiftedFlow {
                 if (validSubstitutions.size() == 0) {
                     // By definition, if there is no valid substitution, the precondition is always false
                     // so this path is impossible
+                    this.isActionExecutable = false;
+                    preconditionsSMT_sb.setLength(0);
                     preconditionsSMT_sb.append("(not " + this.getUniqueName() + ") ");
-                    continue;
+                    // continue
+                    return;
                 }
 
                 if (precondition.isPositive) {
@@ -1149,27 +1163,27 @@ public class LiftedFlow {
     HashMap<Integer, HashMap<LiftedFlow, HashSet<CertifiedPredicate>>> allNegPredicatesWhichCanBeChangedByThisAction, 
     HashSet<String> pseudoFactsAlreadyDefined) {
 
-        HashSet<Integer> falsePredicates = new HashSet<Integer>();
-        HashSet<Integer> truePredicates = new HashSet<Integer>();
+        // HashSet<Integer> falsePredicates = new HashSet<Integer>();
+        // HashSet<Integer> truePredicates = new HashSet<Integer>();
 
         StringBuilder effectsSMT_sb = new StringBuilder();
 
         if (this.effectPredicates.size() == 0) {
 
-            if (LiftedTreePathConfig.restrictRangeScopeVars) {
-                this.relevantFactsIdOutput.clear();
-                this.relevantFactsIdOutput.addAll(this.relevantFactsIdInput);
+            // if (LiftedTreePathConfig.restrictRangeScopeVarsWithRelevantFacts) {
+            //     this.relevantPosFactsIdOutput.clear();
+            //     this.relevantPosFactsIdOutput.addAll(this.relevantPosFactsIdInput);
         
-                // DEBUG
-                // List of all the predicates which may be true after this action
-                for (int id : this.relevantFactsIdOutput) {
-                    SASPredicate pred = UtilsStructureProblem.predicatesSAS[id];
-                    System.out.println("Predicate " + pred.getFullName());
-                }
+            //     // DEBUG
+            //     // List of all the predicates which may be true after this action
+            //     for (int id : this.relevantPosFactsIdOutput) {
+            //         SASPredicate pred = UtilsStructureProblem.predicatesSAS[id];
+            //         System.out.println("Predicate " + pred.getFullName());
+            //     }
     
-                int a = 0;
-                // END DEBUG
-            }
+            //     int a = 0;
+            //     // END DEBUG
+            // }
             return;
         }
 
@@ -1303,11 +1317,11 @@ public class LiftedFlow {
                     allNegPredicatesWhichCanBeChangedByThisAction.get(id).get(this).add(effect);
                 }
 
-                if (LiftedTreePathConfig.restrictRangeScopeVars) {
+                if (LiftedTreePathConfig.restrictRangeScopeVarsWithRelevantFacts) {
                     if (effect.isPositive) {
-                        truePredicates.add(id);
+                        this.relevantPosFactsIdOutput.add(id);
                     } else {
-                        falsePredicates.add(id);
+                        this.relevantNegFactsIdOutput.add(id);
                     }
                 }
             }
@@ -1316,25 +1330,25 @@ public class LiftedFlow {
             int a = 0;
         }
 
-        if (LiftedTreePathConfig.restrictRangeScopeVars) {
-            this.relevantFactsIdOutput.clear();
-            this.relevantFactsIdOutput.addAll(this.relevantFactsIdInput);
+        // if (LiftedTreePathConfig.restrictRangeScopeVarsWithRelevantFacts) {
+        //     this.relevantPosFactsIdOutput.clear();
+        //     this.relevantPosFactsIdOutput.addAll(this.relevantPosFactsIdInput);
 
-            // Give all the predicates which may be true after this action
-            // (All the predicates which are not in this list are false after this action)
-            this.relevantFactsIdOutput.removeAll(falsePredicates);
-            this.relevantFactsIdOutput.addAll(truePredicates);
+        //     // Give all the predicates which may be true after this action
+        //     // (All the predicates which are not in this list are false after this action)
+        //     this.relevantPosFactsIdOutput.removeAll(falsePredicates);
+        //     this.relevantPosFactsIdOutput.addAll(truePredicates);
 
-            // DEBUG
-            // List of all the predicates which may be true after this action
-            for (int id : this.relevantFactsIdOutput) {
-                SASPredicate pred = UtilsStructureProblem.predicatesSAS[id];
-                System.out.println("Predicate " + pred.getFullName());
-            }
+        //     // DEBUG
+        //     // List of all the predicates which may be true after this action
+        //     for (int id : this.relevantPosFactsIdOutput) {
+        //         SASPredicate pred = UtilsStructureProblem.predicatesSAS[id];
+        //         System.out.println("Predicate " + pred.getFullName());
+        //     }
 
-            int a = 0;
-            // END DEBUG
-        }
+        //     int a = 0;
+        //     // END DEBUG
+        // }
 
         effectsSMT_sb.append(")))\n");
 
@@ -1377,25 +1391,80 @@ public class LiftedFlow {
         return flowToDisplay.toString();
     }
 
-    public void setRelevantFactsInputWithInitState(HashSet<Integer> factsTrueAtInit) {
-        this.relevantFactsIdInput.clear();
-        this.relevantFactsIdInput.addAll(factsTrueAtInit);
-    }
 
     public void setRelevantFactsInputWithParents(HashSet<LiftedFlow> parents) {
-        this.relevantFactsIdInput.clear();
+        this.relevantPosFactsIdInput.clear();
+        this.relevantNegFactsIdInput.clear();
+        this.relevantPosFactsIdOutput.clear();
+        this.relevantNegFactsIdOutput.clear();
         for (LiftedFlow parent : parents) {
-            this.relevantFactsIdInput.addAll(parent.relevantFactsIdOutput);
+            if (!parent.isActionExecutable()) {
+                continue;
+            }
+            this.relevantPosFactsIdInput.addAll(parent.relevantPosFactsIdOutput);
+            this.relevantNegFactsIdInput.addAll(parent.relevantNegFactsIdOutput);
+
+            this.relevantPosFactsIdOutput.addAll(parent.relevantPosFactsIdOutput);
+            this.relevantNegFactsIdOutput.addAll(parent.relevantNegFactsIdOutput);
         }
     }
 
     public void pruneScopesVarWithRelevantInputFacts() {
+
+        // DEBUG
+        // for (int idFact : UtilsStructureProblem.getAllFactsIdTrueAtInit()) {
+        //     SASPredicate pred = UtilsStructureProblem.predicatesSAS[idFact];
+        //     System.out.println("Id: " +  idFact + " Predicate " + pred.getFullName());
+        // }
+
+        // END DEBUG
+        
         // Check if we have static preconditions for this action
         for (CertifiedPredicate precond : this.preconditionPredicates) {
-            if (UtilsStructureProblem.staticPredicates.contains(precond.predicateName)) {
-                // 
+
+            boolean atLeastOneGroundingIsRelevant = false;
+
+            if (precond.getPredicateName().equals("=")) {
+                // TODO
+                atLeastOneGroundingIsRelevant = true;
+            }
+            else if (UtilsStructureProblem.staticPredicates.contains(precond.predicateName)) {
+                // TODO 
+                atLeastOneGroundingIsRelevant = true;
+            } else {
+                // Generate all the possible combinations of values for the variables of the precondition
+                // (We only keep the combinations which are compatible with the relevant facts)
+                ArrayList<ArrayList<String>> possibleCombinaisons = UtilsStructureProblem.getAllPossibleCombinaisonsOfCertifiedPredicate(precond);
+                for (ArrayList<String> possibleGrounding : possibleCombinaisons) {
+
+                    // Get the id of the predicate
+                    int id = UtilsStructureProblem.getPredicateID(precond.predicateName, possibleGrounding);
+
+                    // Check if the predicate is relevant
+
+                    // TODO Rewrite this piece of code
+                    boolean isRelevant = false;
+                    if (precond.isPositive && (this.relevantPosFactsIdInput.contains(id) || UtilsStructureProblem.getAllFactsIdTrueAtInit().contains(id))) {
+                        isRelevant = true;
+                    } else if (!precond.isPositive && (this.relevantNegFactsIdInput.contains(id) || !UtilsStructureProblem.getAllFactsIdTrueAtInit().contains(id))) {
+                        isRelevant = true;
+                    }
+
+                    if (isRelevant) {
+                        atLeastOneGroundingIsRelevant = true;
+                        // System.out.println("Pred: " + precond.getPredicateName() + " Possible grounding: " + possibleGrounding + " RELEVANT");
+                    } else {
+                        // System.out.println("Pred: " + precond.getPredicateName() + " Possible grounding: " + possibleGrounding + " NOT RELEVANT");
+                    }
+                }
+            }
+
+            if (!atLeastOneGroundingIsRelevant) {
+                // One of the precondition can never be true, so this action can never be executed
+                this.isActionExecutable = false;
             }
         }
+        int a = 0;
     }
 
 
@@ -1489,5 +1558,13 @@ public class LiftedFlow {
     public void cleanPreconditionAndEffectsSMT() {
         this.preconditionsSMT = "";
         this.effectsSMT = "";
+    }
+
+    public boolean isActionExecutable() {
+        return this.isActionExecutable;
+    }
+
+    public void setIsActionExecutable(boolean isActionExecutable) {
+        this.isActionExecutable = isActionExecutable;
     }
 }
